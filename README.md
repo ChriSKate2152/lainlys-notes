@@ -14,7 +14,7 @@ Now supports multiple notes per user, with details like creator, timestamps, and
 
 2. Clone the repository:
    ```bash
-   git clone https://github.com/AmichaiHadad/lainlys-notes.git
+   git clone https://github.com/ChriSKate2152/lainlys-notes.git
    cd lainlys-notes
    ```
 
@@ -103,3 +103,4 @@ Now supports multiple notes per user, with details like creator, timestamps, and
 - `!notehelp`: Display help for note commands.
 
 Notes are stored per guild with unique IDs, timestamps, and creator info. Responses are sent in the channel.
+Made with :bow_and_arrow: by Lainly 2025 | BM Hunter forever
