@@ -1,5 +1,9 @@
-# Noter
+# Lainlys-notes
 A Discord bot for handling notes for users. Keep track of things about your Discord users!
+This bot is based on Noter from https://github.com/therealOri/noter.git with multiple improvements implemented such as: 
+* Ability to set multiple role IDs. 
+* Added support for multi-notes per UserID 
+* Added command to delete a single note or all notes per UserID
 
 Now supports multiple notes per user, with details like creator, timestamps, and multiple staff roles.
 
@@ -9,8 +13,8 @@ Now supports multiple notes per user, with details like creator, timestamps, and
 
 2. Clone the repository:
    ```bash
-   git clone https://github.com/therealOri/noter.git
-   cd noter
+   git clone https://github.com/AmichaiHadad/lainlys-notes.git
+   cd lainlys-notes
    ```
 
 3. Create and activate a virtual environment:
