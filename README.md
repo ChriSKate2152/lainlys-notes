@@ -4,6 +4,7 @@ This bot is based on Noter from https://github.com/therealOri/noter.git with mul
 * Ability to set multiple role IDs. 
 * Added support for multi-notes per UserID 
 * Added command to delete a single note or all notes per UserID
+* Adjusted bot to work with Discord 2.3.2 api requirements
 
 Now supports multiple notes per user, with details like creator, timestamps, and multiple staff roles.
 
