@@ -103,4 +103,5 @@ Now supports multiple notes per user, with details like creator, timestamps, and
 - `!notehelp`: Display help for note commands.
 
 Notes are stored per guild with unique IDs, timestamps, and creator info. Responses are sent in the channel.
+
 Made with :bow_and_arrow: by Lainly 2025 | BM Hunter forever
