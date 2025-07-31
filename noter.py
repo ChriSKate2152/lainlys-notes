@@ -123,7 +123,7 @@ def create_table(db_conn, table_name):
 ####################################################################################
 async def status():
     while True:
-        status_messages = ['Meta Huntering in BM', '!notehelp for help', 'Getting HoF in Manaforge Omega', 'BM Hunter rotation class']
+        status_messages = ['Meta Huntering in BM', 'Getting HoF in Manaforge Omega', 'BM Hunter rotation class']
         smsg = rnd.choice(status_messages)
         activity = discord.Streaming(type=1, url='https://www.youtube.com/watch?v=0TAfWiy2Sj0', name=smsg)
         await ntr.change_presence(status=discord.Status.online, activity=activity)
