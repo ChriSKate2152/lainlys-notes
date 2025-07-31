@@ -221,6 +221,7 @@ async def help_cmd(ctx: commands.Context):
     embed.add_field(name='!clearnotes <user_id>', value="Deletes all notes for the user and lists them. 🗑️🗑️", inline=False)
     embed.add_field(name='!note fetchall', value="Downloads a zip archive of all server notes. 📦", inline=False)
     embed.add_field(name='!notehelp', value="Shows this help message for note commands. ❓", inline=False)
+    embed.set_footer(text="Made with 🏹 by Lainly 2025 | BM Hunter forever")
     await ctx.send(embed=embed)
 
 @ntr.command(name='notehelp', description='Explains note commands.')
@@ -234,6 +235,7 @@ async def notehelp(ctx: commands.Context):
     embed.add_field(name='!clearnotes <user_id>', value="Deletes all notes for the user and lists them. 🗑️🗑️", inline=False)
     embed.add_field(name='!note fetchall', value="Downloads a zip archive of all server notes. 📦", inline=False)
     embed.add_field(name='!notehelp', value="Shows this help message for note commands. ❓", inline=False)
+    embed.set_footer(text="Made with 🏹 by Lainly 2025 | BM Hunter forever")
     await ctx.send(embed=embed)
 
 @ntr.command(name='ping', description='Test to see if the bot is responsive.')
