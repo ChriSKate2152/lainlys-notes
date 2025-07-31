@@ -1,5 +1,4 @@
 import os
-import numpy as np
 
 
 
@@ -111,35 +110,6 @@ def shuffle(list_of_data):
         return list_of_data
     else:
         raise ValueError('\nUnable to shuffle data. The data provided is not a list, tuple, or dictionary.')
-
-
-
-
-
-
-def randfloat(how_many, decimal_places):
-    check = sys_check()
-    random_floats=[]
-
-    with open("/dev/urandom", "rb") as f:
-        for i in range(how_many):
-            random_bytes = f.read(8192)
-
-            # Convert to uint64 and take just first value
-            random_uint64 = np.frombuffer(random_bytes, dtype=np.uint64)[0]
-
-            # Convert to float
-            random_float = float(random_uint64 / 2**64)
-
-            # Format float string
-            float_str = f'{random_float:.{decimal_places}f}'
-            random_float = float(float_str)
-
-
-    if len(random_floats) < 2:
-        return random_float
-    else:
-        return random_floats
 
 
 

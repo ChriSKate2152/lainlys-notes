@@ -1,54 +1,100 @@
 # Noter
-A discord bot for handling notes for users. Want to keep track of things about your discord users? Then this bot is for you!
+A Discord bot for handling notes for users. Keep track of things about your Discord users!
 
-<br />
-<br />
+Now supports multiple notes per user, with details like creator, timestamps, and multiple staff roles.
 
-# Links
-[DB Browser for sqlite](https://sqlitebrowser.org/dl/)
+## Installation
 
-[Python3](https://www.python.org/downloads/)
+1. Ensure you have Python 3.11+ installed.
 
-[7zip](https://7-zip.org/)
+2. Clone the repository:
+   ```bash
+   git clone https://github.com/therealOri/noter.git
+   cd noter
+   ```
 
-<br />
-<br />
+3. Create and activate a virtual environment:
+   ```bash
+   python3 -m venv ntrENV
+   source ntrENV/bin/activate  # On Linux/Mac
+   # or on Windows: ntrENV\Scripts\activate
+   ```
 
-# Commands
-__ __
-> - /notes add {user_id} {note} | This command will allow you to make a note about a given user.
->   
-> - /notes delete {user_id} | This will remove the note from the database for the specified user.
->   
-> - /notes update {user_id} | This command will allow you to update the note for the specified user.
->   
-> - /notes fetch {user_id} | This command will fetch the note and some extra information about the specified user.
->   
-> - /notes fetch_all {user_id} (password) | This command will fetch all of the DB entries for your guild and package them up nicely into a .7z archive that can optionally be password protected for you to download and view.
-__ __
+4. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-<br />
-<br />
+5. Create a `.env` file in the project root (copy from `.env.example`):
+   ```
+   TOKEN=your-discord-bot-token
+   BOT_LOGO=https://example.com/your-logo.png
+   # Comma-separated list
+   STAFF_ROLE_IDS=123456789,987654321
+   ```
 
-# Installation
-```bash
-[you@user ~]$ git clone https://github.com/therealOri/noter.git
-[you@user ~]$ cd noter
-[you@user ~]$ virtualenv ntrENV
-[you@user ~]$ source ntrENV/bin/activate
-[you@user ~]$ pip install -r requirements.txt
-```
-__ __
-> If you don't have `virtualenv` you can install it via `pip`. `pip install virtualenv`.
+6. Run the bot:
+   ```bash
+   python noter.py
+   ```
 
-<br />
-<br />
-<br />
+## Docker Deployment
 
-# Support  |  Buy me a coffee <3
-(God knows I need one xD)
+1. Ensure Docker is installed on your system.
 
-Donate to me here:
-> - Don't have Cashapp? [Sign Up](https://cash.app/app/TKWGCRT)
+2. Build the Docker image:
+   ```bash
+   docker build -t noter-bot .
+   ```
 
-![image](https://user-images.githubusercontent.com/45724082/158000721-33c00c3e-68bb-4ee3-a2ae-aefa549cfb33.png)
+3. Run the container, passing environment variables (recommended for security instead of copying .env):
+   ```bash
+   docker run -d --name noter-bot \
+     -e TOKEN=your-discord-bot-token \
+     -e BOT_LOGO=https://example.com/your-logo.png \
+     -e STAFF_ROLE_IDS=123456789,987654321 \
+     noter-bot
+   ```
+   Alternatively, if using a .env file:
+   ```bash
+   docker run -d --name noter-bot --env-file .env noter-bot
+   ```
+
+4. View logs:
+   ```bash
+   docker logs noter-bot
+   ```
+
+5. Stop the container:
+   ```bash
+   docker stop noter-bot
+   ```
+
+## Deployment: Adding the Bot to Your Discord Server
+
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications).
+
+2. Create a new application and navigate to the "Bot" tab to create a bot.
+
+3. Copy the bot token and add it to your `.env` file.
+
+4. Under "OAuth2" > "URL Generator":
+   - Select scopes: `bot` and `applications.commands`.
+   - Select permissions: General permissions like View Channels, Send Messages, etc., as needed (minimal for this bot).
+   - Copy the generated URL and open it in your browser to invite the bot to your server.
+
+5. In your server, create role(s) for staff/moderators and note their ID(s) (right-click role > Copy ID, enable Developer Mode in settings if needed).
+
+6. Update `STAFF_ROLE_IDS` in `.env` with the comma-separated list of IDs.
+
+7. Restart the bot or container if running.
+
+## Commands
+- `!noteadd {user_id} {note}`: Add a new note for the specified user (multiple notes per user allowed).
+- `!readnotes {user_id}`: Show all notes for the specified user, including ID, creator, last updated time, and content.
+- `!delnote {note_id}`: Delete a specific note by its ID.
+- `!clearnotes {user_id}`: Delete all notes for the specified user.
+- `!note fetchall`: Download a zip archive of all notes in the server.
+- `!notehelp`: Display help for note commands.
+
+Notes are stored per guild with unique IDs, timestamps, and creator info. Responses are sent in the channel.
