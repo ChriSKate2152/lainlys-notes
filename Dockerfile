@@ -10,6 +10,12 @@ COPY . /app
 # Install dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
+RUN mkdir /data
+
+ENV DB_PATH=/data/user_notes.db
+
+VOLUME ["/data"]
+
 # Expose any necessary ports (none for Discord bot, but optional)
 # EXPOSE 80
 

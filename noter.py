@@ -22,15 +22,14 @@ from beaupy.spinners import *
 from discord.ext import commands
 import re
 from dotenv import load_dotenv
+from discord import app_commands  # Added for slash commands
+import csv  # For CSV export
 
 # Load environment variables
 load_dotenv()
 
 token = os.getenv('TOKEN')
 bot_logo = os.getenv('BOT_LOGO')
-staff_role_ids_str = (os.getenv('STAFF_ROLE_IDS') or '').split('#')[0].strip()
-staff_role_ids = [int(id.strip()) for id in staff_role_ids_str.split(',')] if staff_role_ids_str else []
-
 
 hex_red=0xFF0000
 hex_green=0x0AC700
@@ -154,6 +153,7 @@ class dl_button(discord.ui.View):
 
 
 
+
 ####################################################################################
 #                                                                                  #
 #                                Client Setup                                      #
@@ -166,7 +166,6 @@ ntr = commands.Bot(command_prefix='!', intents=intents)
 ntr.remove_command('help')
 
 # +++++++++++ Client Setup +++++++++++ #
-
 
 
 
@@ -190,6 +189,20 @@ async def on_ready():
 
     print(f'Logged in as {ntr.user} (ID: {ntr.user.id})')
     print('------')
+    await ntr.tree.sync()  # Sync slash commands
+
+@ntr.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.MissingPermissions):
+        await ctx.reply("You must be an administrator to use this command.", delete_after=10)
+    elif isinstance(error, commands.CommandNotFound):
+        pass  # Ignore unknown commands
+    else:
+        await ctx.reply(f"An error occurred: {str(error)}", delete_after=10)
+
+@ntr.tree.error
+async def on_app_command_error(interaction: discord.Interaction, error):
+    await interaction.response.send_message(f"An error occurred: {str(error)}", ephemeral=True, delete_after=10)
 
 # +++++++++++ Events +++++++++++ #
 
@@ -210,47 +223,74 @@ async def on_ready():
 #                             Regular Commands                                     #
 #                                                                                  #
 ####################################################################################
-@ntr.command(name='help', description='Shows you what commands you can use.')
-async def help_cmd(ctx: commands.Context):
-    rnd_hex = random_hex_color()
-    embed = discord.Embed(title='📝 Note Commands Help', colour=rnd_hex, timestamp=datetime.datetime.now(datetime.timezone.utc))
-    embed.set_thumbnail(url=bot_logo)
-    embed.add_field(name='!noteadd <user_id> <note>', value="Adds a new note for the user. 🔖\n*Example:* `!noteadd 123456789 Hello world`", inline=False)
-    embed.add_field(name='!readnotes <user_id>', value="Displays all notes for the user in a formatted embed. 📖", inline=False)
-    embed.add_field(name='!delnote <note_id>', value="Deletes a specific note and shows what was deleted. 🗑️", inline=False)
-    embed.add_field(name='!clearnotes <user_id>', value="Deletes all notes for the user and lists them. 🗑️🗑️", inline=False)
-    embed.add_field(name='!note fetchall', value="Downloads a zip archive of all server notes. 📦", inline=False)
-    embed.add_field(name='!notehelp', value="Shows this help message for note commands. ❓", inline=False)
-    embed.set_footer(text="Made with 🏹 by Lainly 2025 | BM Hunter forever")
-    await ctx.send(embed=embed)
+async def get_context_handlers(context):
+    if isinstance(context, commands.Context):
+        guild_id = context.guild.id if context.guild else None
+        creator_name = context.author.name if context.author else 'Unknown'
+        async def reply_func(content=None, **kwargs):
+            return await context.reply(content, **kwargs)
+        async def send_func(content=None, **kwargs):
+            return await context.send(content, **kwargs)
+        is_slash = False
+    elif isinstance(context, discord.Interaction):
+        guild_id = context.guild_id
+        creator_name = context.user.name
+        async def reply_func(content=None, **kwargs):
+            if 'delete_after' in kwargs:
+                del kwargs['delete_after']
+            if not context.response.is_done():
+                return await context.response.send_message(content=content, **kwargs)
+            else:
+                return await context.followup.send(content=content, **kwargs)
+        async def send_func(content=None, **kwargs):
+            if 'delete_after' in kwargs:
+                del kwargs['delete_after']
+            if not context.response.is_done():
+                return await context.response.send_message(content=content, **kwargs)
+            else:
+                return await context.followup.send(content=content, **kwargs)
+        is_slash = True
+    else:
+        raise ValueError("Invalid context type")
+    return guild_id, creator_name, reply_func, send_func, is_slash
 
 @ntr.command(name='notehelp', description='Explains note commands.')
-async def notehelp(ctx: commands.Context):
+@commands.has_permissions(administrator=True)
+async def notehelp(context):
+    guild_id, creator_name, reply_func, send_func, is_slash = await get_context_handlers(context)
     rnd_hex = random_hex_color()
     embed = discord.Embed(title='📝 Note Commands Help', colour=rnd_hex, timestamp=datetime.datetime.now(datetime.timezone.utc))
     embed.set_thumbnail(url=bot_logo)
-    embed.add_field(name='!noteadd <user_id> <note>', value="Adds a new note for the user. 🔖\n*Example:* `!noteadd 123456789 Hello world`", inline=False)
-    embed.add_field(name='!readnotes <user_id>', value="Displays all notes for the user in a formatted embed. 📖", inline=False)
-    embed.add_field(name='!delnote <note_id>', value="Deletes a specific note and shows what was deleted. 🗑️", inline=False)
-    embed.add_field(name='!clearnotes <user_id>', value="Deletes all notes for the user and lists them. 🗑️🗑️", inline=False)
-    embed.add_field(name='!note fetchall', value="Downloads a zip archive of all server notes. 📦", inline=False)
-    embed.add_field(name='!notehelp', value="Shows this help message for note commands. ❓", inline=False)
+    if is_slash:
+        prefix = '/'
+        embed.add_field(name=f'{prefix}noteadd <user_id> <note>', value="Adds a new note for the user. 🔖", inline=False)
+        embed.add_field(name=f'{prefix}readnotes <user_id>', value="Displays all notes for the user in a formatted embed. 📖", inline=False)
+        embed.add_field(name=f'{prefix}delnote <note_id>', value="Deletes a specific note and shows what was deleted. 🗑️", inline=False)
+        embed.add_field(name=f'{prefix}clearnotes <user_id>', value="Deletes all notes for the user and lists them. 🗑️🗑️", inline=False)
+        embed.add_field(name=f'{prefix}note fetchall', value="Downloads a zip archive of all server notes. 📦", inline=False)
+        embed.add_field(name=f'{prefix}notehelp', value="Shows this help message for note commands. ❓", inline=False)
+        embed.add_field(name=f'{prefix}help', value="Shows this help message for note commands. ❓", inline=False)
+    else:
+        prefix = '!'
+        embed.add_field(name=f'{prefix}noteadd <user_id> <note>', value="Adds a new note for the user. 🔖", inline=False)
+        embed.add_field(name=f'{prefix}readnotes <user_id>', value="Displays all notes for the user in a formatted embed. 📖", inline=False)
+        embed.add_field(name=f'{prefix}delnote <note_id>', value="Deletes a specific note and shows what was deleted. 🗑️", inline=False)
+        embed.add_field(name=f'{prefix}clearnotes <user_id>', value="Deletes all notes for the user and lists them. 🗑️🗑️", inline=False)
+        embed.add_field(name=f'{prefix}note fetchall', value="Downloads a zip archive of all server notes. 📦", inline=False)
+        embed.add_field(name=f'{prefix}notehelp', value="Shows this help message for note commands. ❓", inline=False)
     embed.set_footer(text="Made with 🏹 by Lainly 2025 | BM Hunter forever")
-    await ctx.send(embed=embed)
-
-@ntr.command(name='ping', description='Test to see if the bot is responsive.')
-async def ping(ctx: commands.Context):
-    await ctx.send(f"⏱️ Pong! ⏱️\nConnection speed is {round(ntr.latency * 1000)}ms")
+    await send_func(embed=embed)
 
 @ntr.command(name='readnotes')
-async def readnotes(ctx: commands.Context, user_id: str):
-    if not any(role.id in staff_role_ids for role in ctx.author.roles):
-        await ctx.reply("You don't have permission to use this command.", delete_after=10)
+@commands.has_permissions(administrator=True)
+async def readnotes(context, user_id: str):
+    guild_id, creator_name, reply_func, send_func, is_slash = await get_context_handlers(context)
+    if guild_id is None:
+        await reply_func("This command can only be used in a server.", ephemeral=True if is_slash else False)
         return
 
-    database = sqlite3.connect('user_notes.db')
+    database = sqlite3.connect('/data/user_notes.db')
     c = database.cursor()
-    guild_id = ctx.guild.id
     table_name = f"guild_{guild_id}"
 
     create_table(database, table_name)
@@ -266,7 +306,7 @@ async def readnotes(ctx: commands.Context, user_id: str):
             username = user.name
         except:
             username = user_id
-        await ctx.reply(f"\"{username}\" has no notes.")
+        await reply_func(f"\"{username}\" has no notes.")
         database.close()
         return
 
@@ -291,18 +331,19 @@ async def readnotes(ctx: commands.Context, user_id: str):
     embed = discord.Embed(title=f"Notes for \"{username}\"", description=full_text, colour=rnd_hex, timestamp=datetime.datetime.now(datetime.timezone.utc))
     if thumbnail:
         embed.set_thumbnail(url=thumbnail)
-    await ctx.send(embed=embed)
+    await send_func(embed=embed)
     database.close()
 
 @ntr.command(name='delnote')
-async def delnote(ctx: commands.Context, note_id: int):
-    if not any(role.id in staff_role_ids for role in ctx.author.roles):
-        await ctx.reply("You don't have permission to use this command.", delete_after=10)
+@commands.has_permissions(administrator=True)
+async def delnote(context, note_id: int):
+    guild_id, creator_name, reply_func, send_func, is_slash = await get_context_handlers(context)
+    if guild_id is None:
+        await reply_func("This command can only be used in a server.", ephemeral=True if is_slash else False)
         return
 
-    database = sqlite3.connect('user_notes.db')
+    database = sqlite3.connect('/data/user_notes.db')
     c = database.cursor()
-    guild_id = ctx.guild.id
     table_name = f"guild_{guild_id}"
 
     create_table(database, table_name)
@@ -311,7 +352,7 @@ async def delnote(ctx: commands.Context, note_id: int):
     existing_row = c.fetchone()
 
     if not existing_row:
-        await ctx.reply(f"No note found with ID {note_id}.")
+        await reply_func(f"No note found with ID {note_id}.")
     else:
         note_id, creator, dt, content = existing_row
         parsed_dt = datetime.datetime.fromisoformat(dt)
@@ -319,19 +360,20 @@ async def delnote(ctx: commands.Context, note_id: int):
         note_text = f"**Note #{note_id}**\nFrom: \"{creator}\"\nLast Update: {formatted_dt}\n{content}"
         c.execute(f"DELETE FROM {table_name} WHERE row = ?", (note_id,))
         database.commit()
-        await ctx.reply(f"Deleted the following note:\n{note_text}")
+        await reply_func(f"Deleted the following note:\n{note_text}")
 
     database.close()
 
 @ntr.command(name='clearnotes')
-async def clearnotes(ctx: commands.Context, user_id: str):
-    if not any(role.id in staff_role_ids for role in ctx.author.roles):
-        await ctx.reply("You don't have permission to use this command.", delete_after=10)
+@commands.has_permissions(administrator=True)
+async def clearnotes(context, user_id: str):
+    guild_id, creator_name, reply_func, send_func, is_slash = await get_context_handlers(context)
+    if guild_id is None:
+        await reply_func("This command can only be used in a server.", ephemeral=True if is_slash else False)
         return
 
-    database = sqlite3.connect('user_notes.db')
+    database = sqlite3.connect('/data/user_notes.db')
     c = database.cursor()
-    guild_id = ctx.guild.id
     table_name = f"guild_{guild_id}"
 
     create_table(database, table_name)
@@ -342,7 +384,7 @@ async def clearnotes(ctx: commands.Context, user_id: str):
     rows = c.fetchall()
 
     if not rows:
-        await ctx.reply(f"No notes found for the user with ID {user_id}.")
+        await reply_func(f"No notes found for the user with ID {user_id}.")
         database.close()
         return
 
@@ -358,22 +400,25 @@ async def clearnotes(ctx: commands.Context, user_id: str):
     c.execute(f"DELETE FROM {table_name} WHERE user_id = ?", (user_id,))
     database.commit()
 
-    await ctx.reply(f"Deleted the following notes:\n{full_text}")
+    await reply_func(f"Deleted the following notes:\n{full_text}")
     database.close()
 
 @ntr.group(name="note", invoke_without_command=True)
-async def note(ctx: commands.Context):
-    await ctx.reply("Available subcommands: fetchall")
+@commands.has_permissions(administrator=True)
+async def note(context):
+    guild_id, creator_name, reply_func, send_func, is_slash = await get_context_handlers(context)
+    await reply_func("Available subcommands: fetchall")
 
 @ntr.command(name="noteadd", description="Adds a note about a user.")
-async def noteadd(ctx: commands.Context, user_id: str, *, note: str):
-    if not any(role.id in staff_role_ids for role in ctx.author.roles):
-        await ctx.reply("You don't have permission to use this command.", delete_after=10)
+@commands.has_permissions(administrator=True)
+async def noteadd(context, user_id: str, *, note: str):
+    guild_id, creator_name, reply_func, send_func, is_slash = await get_context_handlers(context)
+    if guild_id is None:
+        await reply_func("This command can only be used in a server.", ephemeral=True if is_slash else False)
         return
 
-    database = sqlite3.connect('user_notes.db')
+    database = sqlite3.connect('/data/user_notes.db')
     c = database.cursor()
-    guild_id = ctx.guild.id
     table_name = f"guild_{guild_id}"
 
     create_table(database, table_name)
@@ -383,29 +428,34 @@ async def noteadd(ctx: commands.Context, user_id: str, *, note: str):
     try:
         user = await ntr.fetch_user(int(user_id))
     except:
-        await ctx.reply("Invalid user ID.")
+        await reply_func("Invalid user ID.")
         database.close()
         return
 
     user_name = f"@{user.name}"
-    creator_name = ctx.author.name
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     row = (user_id, user_name, note, creator_name, now, now)
     c.execute(f"INSERT INTO {table_name} (user_id, user_name, note, creator_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", row)
     database.commit()
     note_id = c.lastrowid
-    await ctx.reply(f"✅ Note Taken. Note: {note} (ID: {note_id})")
+    await reply_func(f"✅ Note Taken. Note: {note} (ID: {note_id})")
     database.close()
 
 @note.command(name="fetchall", description="Fetches all user notes.")
-async def note_fetchall(ctx: commands.Context):
-    if not any(role.id in staff_role_ids for role in ctx.author.roles):
-        await ctx.reply("You don't have permission to use this command.", delete_after=10)
+@commands.has_permissions(administrator=True)
+async def note_fetchall(context):
+    guild_id, creator_name, reply_func, send_func, is_slash = await get_context_handlers(context)
+    if guild_id is None:
+        await reply_func("This command can only be used in a server.", ephemeral=True if is_slash else False)
         return
 
-    database = sqlite3.connect('user_notes.db')
+    guild = ntr.get_guild(guild_id) or await ntr.fetch_guild(guild_id)
+    server_name = guild.name.replace(' ', '_')
+    date_str = datetime.datetime.now().strftime('%d-%m-%Y')
+    filename = f"{server_name}-notes-archive-{date_str}.csv"
+
+    database = sqlite3.connect('/data/user_notes.db')
     c = database.cursor()
-    guild_id = ctx.guild.id
     table_name = f"guild_{guild_id}"
 
     create_table(database, table_name)
@@ -414,19 +464,24 @@ async def note_fetchall(ctx: commands.Context):
     database.close()
 
     if rows:
-        items = [str(row) for row in rows]
-        with open('output.txt', 'w') as f:
-            f.write('\n'.join(items))
+        with open(filename, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(['row', 'user_id', 'user_name', 'note', 'creator_name', 'created_at', 'updated_at'])
+            for row in rows:
+                modified_row = list(row)
+                modified_row[1] = f'="{row[1]}"'  # Force user_id as text in Excel
+                writer.writerow(modified_row)
 
         with zipfile.ZipFile('user_db_notes.zip', 'w', zipfile.ZIP_DEFLATED) as zipf:
-            zipf.write('output.txt')
+            zipf.write(filename)
 
-        os.remove("output.txt")
-        await ctx.send("DB logs here - Expires in 1min", view=dl_button(), delete_after=60)
+        os.remove(filename)
+        if is_slash:
+            await send_func("DB logs here - Expires in 1min", view=dl_button())
+        else:
+            await send_func("DB logs here - Expires in 1min", view=dl_button(), delete_after=60)
     else:
-        await ctx.reply("Database is empty - No notes available to fetch.")
-
-# ntr.add_command(note_group)  # No longer needed with decorator
+        await reply_func("Database is empty - No notes available to fetch.")
 
 # +++++++++++ Regular Commands +++++++++++ #
 
@@ -446,6 +501,41 @@ async def note_fetchall(ctx: commands.Context):
 
 
 
+
+# Slash Command Equivalents (available to all users)
+@ntr.tree.command(name="help", description="Shows this help message for note commands. ❓")
+async def slash_help(interaction: discord.Interaction):
+    await notehelp(interaction)
+
+@ntr.tree.command(name="notehelp", description="Shows this help message for note commands. ❓")
+async def slash_notehelp(interaction: discord.Interaction):
+    await notehelp(interaction)
+
+@ntr.tree.command(name="readnotes", description="Displays all notes for the user in a formatted embed. 📖")
+@app_commands.describe(user_id="The user ID to read notes for")
+async def slash_readnotes(interaction: discord.Interaction, user_id: str):
+    await readnotes(interaction, user_id)
+
+@ntr.tree.command(name="delnote", description="Deletes a specific note and shows what was deleted. 🗑️")
+@app_commands.describe(note_id="The note ID to delete")
+async def slash_delnote(interaction: discord.Interaction, note_id: int):
+    await delnote(interaction, note_id)
+
+@ntr.tree.command(name="clearnotes", description="Deletes all notes for the user and lists them. 🗑️🗑️")
+@app_commands.describe(user_id="The user ID to clear notes for")
+async def slash_clearnotes(interaction: discord.Interaction, user_id: str):
+    await clearnotes(interaction, user_id)
+
+@ntr.tree.command(name="noteadd", description="Adds a new note for the user. 🔖")
+@app_commands.describe(user_id="The user ID to add a note for", note="The note content")
+async def slash_noteadd(interaction: discord.Interaction, user_id: str, note: str):
+    await noteadd(interaction, user_id, note=note)
+
+note_group = app_commands.Group(name="note", description="Note management commands")
+@note_group.command(name="fetchall", description="Downloads a zip archive of all server notes. 📦")
+async def slash_note_fetchall(interaction: discord.Interaction):
+    await note_fetchall(interaction)
+ntr.tree.add_command(note_group)
 
 if __name__ == '__main__':
     ntr.run(token, reconnect=True)
