@@ -132,6 +132,8 @@ These are available to all users in the server, but access can be limited by ser
 - `/notehelp`: Shows this help message for note commands. ❓
 - `/help`: Shows this help message for note commands. ❓
 
+
+### Attention:
 * Notes and reminders are stored per guild (server) with unique IDs, timestamps, and creator info. Responses are sent in the channel where the command is invoked. 
 * Exports create a CSV file named "{servername}-notes-archive-{dd}-{mm}-{yyyy}.csv" zipped for download. 
 * Reminders support relative times like "in 2 hours", "tomorrow at 8", "next monday at 20:00" and automatically adjust for future dates if necessary.
