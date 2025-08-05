@@ -24,6 +24,7 @@ import re
 from dotenv import load_dotenv
 from discord import app_commands  # Added for slash commands
 import csv  # For CSV export
+import dateparser
 
 # Load environment variables
 load_dotenv()
@@ -101,6 +102,35 @@ def create_table(db_conn, table_name):
         c.execute(f"UPDATE {table_name} SET updated_at = ? WHERE updated_at IS NULL", (now,))
 
     db_conn.commit()
+
+def parse_time(time_str):
+    import re
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if re.match(r'^\d{1,2}(:\d{2})?$', time_str):
+        time_str = f"at {time_str}"
+    parsed = dateparser.parse(time_str, settings={'TIMEZONE': 'UTC', 'RETURN_AS_TIMEZONE_AWARE': True, 'PREFER_DATES_FROM': 'future'})
+    if parsed is None:
+        return None
+    if parsed.date() == now.date() and parsed < now:
+        parsed += datetime.timedelta(days=1)
+    return parsed
+
+def create_reminders_table(db_conn, table_name):
+    c = db_conn.cursor()
+    c.execute(f"""
+        CREATE TABLE IF NOT EXISTS {table_name} (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            channel_id TEXT,
+            user_id TEXT,
+            creator_id TEXT,
+            content TEXT,
+            target_time TEXT,
+            sent INTEGER DEFAULT 0,
+            created_at TEXT
+        );
+    """)
+    db_conn.commit()
+
 # +++++++++++ Normal Functions +++++++++++ #
 
 
@@ -142,13 +172,36 @@ class dl_button(discord.ui.View):
 
 # +++++++++++ Async Functions, buttons, modals, etc. +++++++++++ #
 
-
-
-
-
-
-
-
+async def reminder_loop():
+    while True:
+        database = sqlite3.connect('/data/user_notes.db')
+        c = database.cursor()
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'reminders_%'")
+        tables = [row[0] for row in c.fetchall()]
+        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        for table in tables:
+            c.execute(f"SELECT id, channel_id, user_id, creator_id, content FROM {table} WHERE sent = 0 AND target_time <= ?", (now,))
+            for rid, channel_id, user_id, creator_id, content in c.fetchall():
+                try:
+                    creator = await ntr.fetch_user(int(creator_id))
+                    creator_name = creator.name
+                except:
+                    creator_name = f"User {creator_id}"
+                try:
+                    if channel_id is not None:
+                        channel = ntr.get_channel(int(channel_id))
+                        if channel:
+                            await channel.send(f"🔔 Reminder: {content} #requested by <@{creator_id}>")
+                    elif user_id is not None:
+                        user = await ntr.fetch_user(int(user_id))
+                        if user:
+                            await user.send(f"🔔 Reminder: {content}")
+                except Exception as e:
+                    print(f"Error sending reminder {rid} from {table}: {e}")
+                c.execute(f"UPDATE {table} SET sent = 1 WHERE id = ?", (rid,))
+        database.commit()
+        database.close()
+        await asyncio.sleep(60)
 
 
 
@@ -186,6 +239,7 @@ async def on_ready():
     me = await ntr.fetch_user(254148960510279683)
     author_logo = me.avatar
     ntr.loop.create_task(status())
+    ntr.loop.create_task(reminder_loop())
 
     print(f'Logged in as {ntr.user} (ID: {ntr.user.id})')
     print('------')
@@ -252,14 +306,15 @@ async def get_context_handlers(context):
         is_slash = True
     else:
         raise ValueError("Invalid context type")
-    return guild_id, creator_name, reply_func, send_func, is_slash
+    creator_id = context.author.id if isinstance(context, commands.Context) else context.user.id
+    return guild_id, creator_name, reply_func, send_func, is_slash, creator_id
 
 @ntr.command(name='notehelp', description='Explains note commands.')
 @commands.has_permissions(administrator=True)
 async def notehelp(context):
-    guild_id, creator_name, reply_func, send_func, is_slash = await get_context_handlers(context)
+    guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
     rnd_hex = random_hex_color()
-    embed = discord.Embed(title='📝 Note Commands Help', colour=rnd_hex, timestamp=datetime.datetime.now(datetime.timezone.utc))
+    embed = discord.Embed(title='📝 Commands Help', colour=rnd_hex, timestamp=datetime.datetime.now(datetime.timezone.utc))
     embed.set_thumbnail(url=bot_logo)
     if is_slash:
         prefix = '/'
@@ -270,6 +325,8 @@ async def notehelp(context):
         embed.add_field(name=f'{prefix}note fetchall', value="Downloads a zip archive of all server notes. 📦", inline=False)
         embed.add_field(name=f'{prefix}notehelp', value="Shows this help message for note commands. ❓", inline=False)
         embed.add_field(name=f'{prefix}help', value="Shows this help message for note commands. ❓", inline=False)
+        embed.add_field(name=f'{prefix}rm <time> <content>', value="Sets a reminder to send in the channel at the specified time. ⏰", inline=False)
+        embed.add_field(name=f'{prefix}rmdm <time> <content>', value="Sets a personal DM reminder at the specified time. 📩", inline=False)
     else:
         prefix = '!'
         embed.add_field(name=f'{prefix}noteadd <user_id> <note>', value="Adds a new note for the user. 🔖", inline=False)
@@ -278,13 +335,16 @@ async def notehelp(context):
         embed.add_field(name=f'{prefix}clearnotes <user_id>', value="Deletes all notes for the user and lists them. 🗑️🗑️", inline=False)
         embed.add_field(name=f'{prefix}note fetchall', value="Downloads a zip archive of all server notes. 📦", inline=False)
         embed.add_field(name=f'{prefix}notehelp', value="Shows this help message for note commands. ❓", inline=False)
+        embed.add_field(name=f'{prefix}help', value="Shows this help message for note commands. ❓", inline=False)
+        embed.add_field(name=f'{prefix}rm <time> <content>', value="Sets a reminder to send in the channel at the specified time. ⏰", inline=False)
+        embed.add_field(name=f'{prefix}rmdm <time> <content>', value="Sets a personal DM reminder at the specified time. 📩", inline=False)
     embed.set_footer(text="Made with 🏹 by Lainly 2025 | BM Hunter forever")
     await send_func(embed=embed)
 
 @ntr.command(name='readnotes')
 @commands.has_permissions(administrator=True)
 async def readnotes(context, user_id: str):
-    guild_id, creator_name, reply_func, send_func, is_slash = await get_context_handlers(context)
+    guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
     if guild_id is None:
         await reply_func("This command can only be used in a server.", ephemeral=True if is_slash else False)
         return
@@ -337,7 +397,7 @@ async def readnotes(context, user_id: str):
 @ntr.command(name='delnote')
 @commands.has_permissions(administrator=True)
 async def delnote(context, note_id: int):
-    guild_id, creator_name, reply_func, send_func, is_slash = await get_context_handlers(context)
+    guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
     if guild_id is None:
         await reply_func("This command can only be used in a server.", ephemeral=True if is_slash else False)
         return
@@ -367,7 +427,7 @@ async def delnote(context, note_id: int):
 @ntr.command(name='clearnotes')
 @commands.has_permissions(administrator=True)
 async def clearnotes(context, user_id: str):
-    guild_id, creator_name, reply_func, send_func, is_slash = await get_context_handlers(context)
+    guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
     if guild_id is None:
         await reply_func("This command can only be used in a server.", ephemeral=True if is_slash else False)
         return
@@ -406,13 +466,13 @@ async def clearnotes(context, user_id: str):
 @ntr.group(name="note", invoke_without_command=True)
 @commands.has_permissions(administrator=True)
 async def note(context):
-    guild_id, creator_name, reply_func, send_func, is_slash = await get_context_handlers(context)
+    guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
     await reply_func("Available subcommands: fetchall")
 
 @ntr.command(name="noteadd", description="Adds a note about a user.")
 @commands.has_permissions(administrator=True)
 async def noteadd(context, user_id: str, *, note: str):
-    guild_id, creator_name, reply_func, send_func, is_slash = await get_context_handlers(context)
+    guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
     if guild_id is None:
         await reply_func("This command can only be used in a server.", ephemeral=True if is_slash else False)
         return
@@ -444,7 +504,7 @@ async def noteadd(context, user_id: str, *, note: str):
 @note.command(name="fetchall", description="Fetches all user notes.")
 @commands.has_permissions(administrator=True)
 async def note_fetchall(context):
-    guild_id, creator_name, reply_func, send_func, is_slash = await get_context_handlers(context)
+    guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
     if guild_id is None:
         await reply_func("This command can only be used in a server.", ephemeral=True if is_slash else False)
         return
@@ -482,6 +542,46 @@ async def note_fetchall(context):
             await send_func("DB logs here - Expires in 1min", view=dl_button(), delete_after=60)
     else:
         await reply_func("Database is empty - No notes available to fetch.")
+
+# +++++++++++ Regular Commands +++++++++++ #
+
+async def set_reminder(context, time_str: str, content: str, is_dm: bool):
+    guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
+    if guild_id is None:
+        await reply_func("This command can only be used in a server.", ephemeral=True if is_slash else False)
+        return
+    parsed_time = parse_time(time_str)
+    if parsed_time is None:
+        await reply_func("Invalid time format. Examples: 'in 2 hours', 'tomorrow at 8', 'next monday at 20:00'")
+        return
+    if parsed_time < datetime.datetime.now(datetime.timezone.utc):
+        await reply_func("Cannot set a reminder in the past.")
+        return
+    database = sqlite3.connect('/data/user_notes.db')
+    table_name = f"reminders_{guild_id}"
+    create_reminders_table(database, table_name)
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    channel_id = context.channel.id if isinstance(context, commands.Context) else context.channel_id
+    user_id = creator_id if is_dm else None
+    channel_id = channel_id if not is_dm else None
+    row = (str(channel_id) if channel_id else None, str(user_id) if user_id else None, str(creator_id), content, parsed_time.isoformat(), 0, now)
+    c = database.cursor()
+    c.execute(f"INSERT INTO {table_name} (channel_id, user_id, creator_id, content, target_time, sent, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", row)
+    database.commit()
+    rid = c.lastrowid
+    formatted_date = parsed_time.strftime('%d/%m/%Y')
+    formatted_time = parsed_time.strftime('%H:%M:%S')
+    await reply_func(f"Reminder set by {creator_name} for {formatted_date}, {formatted_time}, UTC. #Reminder ID:{rid}")
+    database.close()
+
+@ntr.command(name='rm')
+@commands.has_permissions(administrator=True)
+async def prefix_rm(context, time_str: str, *, content: str):
+    await set_reminder(context, time_str, content, False)
+@ntr.command(name='rmdm')
+@commands.has_permissions(administrator=True)
+async def prefix_rmdm(context, time_str: str, *, content: str):
+    await set_reminder(context, time_str, content, True)
 
 # +++++++++++ Regular Commands +++++++++++ #
 
@@ -536,6 +636,16 @@ note_group = app_commands.Group(name="note", description="Note management comman
 async def slash_note_fetchall(interaction: discord.Interaction):
     await note_fetchall(interaction)
 ntr.tree.add_command(note_group)
+
+@ntr.tree.command(name="rm", description="Sets a reminder to send in the channel at the specified time. ⏰")
+@app_commands.describe(time_str="The time for the reminder (e.g., 'in 2 hours', 'next monday at 8')", content="The reminder message")
+async def slash_rm(interaction: discord.Interaction, time_str: str, content: str):
+    await set_reminder(interaction, time_str, content, False)
+
+@ntr.tree.command(name="rmdm", description="Sets a personal DM reminder at the specified time. 📩")
+@app_commands.describe(time_str="The time for the reminder (e.g., 'in 2 hours', 'next monday at 8')", content="The reminder message")
+async def slash_rmdm(interaction: discord.Interaction, time_str: str, content: str):
+    await set_reminder(interaction, time_str, content, True)
 
 if __name__ == '__main__':
     ntr.run(token, reconnect=True)

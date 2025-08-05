@@ -1,6 +1,6 @@
 # Lainlys-notes
 
-A comprehensive Discord bot for managing user notes in servers. This bot allows server administrators and moderators to keep track of important information about users, such as warnings, reminders, or custom details. It supports multiple notes per user, with features like adding, reading, deleting specific notes or all notes for a user, and exporting notes as a CSV archive. Notes include metadata like creator, creation time, and last update time.
+A Discord bot for managing user notes and reminders in servers. This bot allows server administrators and moderators to keep track of important information about users, such as warnings, reminders, or custom details. It supports multiple notes per user, with features like adding, reading, deleting specific notes or all notes for a user, and exporting notes as a CSV archive. Notes include metadata like creator, creation time, and last update time. The reminder feature allows setting timed messages to channels or personal DMs with flexible time parsing.
 
 The bot distinguishes between prefix commands (!commands) restricted to server administrators and slash commands (/commands) available to all users, with access controllable via Discord's permission system. This makes it flexible for different server setups.
 
@@ -10,6 +10,7 @@ This bot is based on Noter from https://github.com/therealOri/noter.git with mul
 * Adjusted bot to work with Discord 2.3.2 api requirements
 * Enhanced export functionality to CSV with dynamic filenames
 * Docker support with volume mounting for data persistence
+* Added channel / Direct message based reminders
 
 Credit: therealOri | https://github.com/therealOri
 
@@ -113,7 +114,10 @@ These are restricted to users with Administrator permissions on the server. They
 - `!delnote {note_id}`: Deletes a specific note and shows what was deleted. 🗑️
 - `!clearnotes {user_id}`: Deletes all notes for the user and lists them. 🗑️🗑️
 - `!note fetchall`: Downloads a zip archive of all server notes as CSV. 📦
+- `!rm {time} {reminder content}`: Sends a reminder to the channel at the specified time. ⏰
+- `!rmdm {time} {reminder content}`: Sends a personal DM reminder at the specified time. ⏰
 - `!notehelp`: Shows this help message for note commands. ❓
+
 
 ### Slash Commands (/commands)
 These are available to all users in the server, but access can be limited by server admins through Discord's permission system (e.g., channel permissions, role restrictions). This allows fine-grained control without bot-side restrictions.
@@ -123,9 +127,12 @@ These are available to all users in the server, but access can be limited by ser
 - `/delnote {note_id}`: Deletes a specific note and shows what was deleted. 🗑️
 - `/clearnotes {user_id}`: Deletes all notes for the user and lists them. 🗑️🗑️
 - `/note fetchall`: Downloads a zip archive of all server notes as CSV. 📦
+- `!rm {time} {reminder content}`: Sends a reminder to the channel at the specified time. ⏰
+- `!rmdm {time} {reminder content}`: Sends a personal DM reminder at the specified time. ⏰
 - `/notehelp`: Shows this help message for note commands. ❓
 - `/help`: Shows this help message for note commands. ❓
 
-Notes are stored per guild (server) with unique IDs, timestamps, and creator info. Responses are sent in the channel where the command is invoked. Exports create a CSV file named "{servername}-notes-archive-{dd}-{mm}-{yyyy}.csv" zipped for download.
+Notes and reminders are stored per guild (server) with unique IDs, timestamps, and creator info. Responses are sent in the channel where the command is invoked. Exports create a CSV file named "{servername}-notes-archive-{dd}-{mm}-{yyyy}.csv" zipped for download. 
+Reminders support relative times like "in 2 hours", "tomorrow at 8", "next monday at 20:00" and automatically adjust for future dates if necessary.
 
 Made with :bow_and_arrow: by Lainly 2025 | BM Hunter forever
