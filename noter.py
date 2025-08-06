@@ -25,6 +25,9 @@ from dotenv import load_dotenv
 from discord import app_commands  # Added for slash commands
 import csv  # For CSV export
 import dateparser
+import pytz
+
+CET_TZ = pytz.timezone('Europe/Berlin')
 
 # Load environment variables
 load_dotenv()
@@ -93,22 +96,22 @@ def create_table(db_conn, table_name):
 
     if "created_at" not in columns:
         c.execute(f"ALTER TABLE {table_name} ADD COLUMN created_at TEXT")
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        now = datetime.datetime.now(CET_TZ).isoformat()
         c.execute(f"UPDATE {table_name} SET created_at = ? WHERE created_at IS NULL", (now,))
 
     if "updated_at" not in columns:
         c.execute(f"ALTER TABLE {table_name} ADD COLUMN updated_at TEXT")
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        now = datetime.datetime.now(CET_TZ).isoformat()
         c.execute(f"UPDATE {table_name} SET updated_at = ? WHERE updated_at IS NULL", (now,))
 
     db_conn.commit()
 
 def parse_time(time_str):
     import re
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(CET_TZ)
     if re.match(r'^\d{1,2}(:\d{2})?$', time_str):
         time_str = f"at {time_str}"
-    parsed = dateparser.parse(time_str, settings={'TIMEZONE': 'UTC', 'RETURN_AS_TIMEZONE_AWARE': True, 'PREFER_DATES_FROM': 'future'})
+    parsed = dateparser.parse(time_str, settings={'TIMEZONE': 'CET', 'RETURN_AS_TIMEZONE_AWARE': True, 'PREFER_DATES_FROM': 'future'})
     if parsed is None:
         return None
     if parsed.date() == now.date() and parsed < now:
@@ -178,7 +181,7 @@ async def reminder_loop():
         c = database.cursor()
         c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'reminders_%'")
         tables = [row[0] for row in c.fetchall()]
-        now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+        now = datetime.datetime.now(CET_TZ).isoformat()
         for table in tables:
             c.execute(f"SELECT id, channel_id, user_id, creator_id, content FROM {table} WHERE sent = 0 AND target_time <= ?", (now,))
             for rid, channel_id, user_id, creator_id, content in c.fetchall():
@@ -314,7 +317,7 @@ async def get_context_handlers(context):
 async def notehelp(context):
     guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
     rnd_hex = random_hex_color()
-    embed = discord.Embed(title='**🔑 Commands Index**', colour=rnd_hex, timestamp=datetime.datetime.now(datetime.timezone.utc))
+    embed = discord.Embed(title='**🔑 Commands Index**', colour=rnd_hex, timestamp=datetime.datetime.now(CET_TZ))
     embed.set_thumbnail(url=bot_logo)
     if is_slash:
         prefix = '/'
@@ -403,14 +406,14 @@ async def readnotes(context, user_id: str):
     note_texts = []
     for r in rows:
         note_id, creator, dt, content = r
-        parsed_dt = datetime.datetime.fromisoformat(dt)
-        formatted_dt = parsed_dt.strftime('%d/%m/%Y %H:%M:%S | UTC')
+        parsed_dt = datetime.datetime.fromisoformat(dt).astimezone(CET_TZ)
+        formatted_dt = parsed_dt.strftime('%d/%m/%Y %H:%M:%S | CET')
         note_texts.append(f"**Note #{note_id}**\nFrom: \"{creator}\"\nLast Update: {formatted_dt}\n{content}")
 
     full_text = "\n---\n".join(note_texts)
 
     rnd_hex = random_hex_color()
-    embed = discord.Embed(title=f"Notes for \"{username}\"", description=full_text, colour=rnd_hex, timestamp=datetime.datetime.now(datetime.timezone.utc))
+    embed = discord.Embed(title=f"Notes for \"{username}\"", description=full_text, colour=rnd_hex, timestamp=datetime.datetime.now(CET_TZ))
     if thumbnail:
         embed.set_thumbnail(url=thumbnail)
     await send_func(embed=embed)
@@ -437,8 +440,8 @@ async def delnote(context, note_id: int):
         await reply_func(f"No note found with ID {note_id}.")
     else:
         note_id, creator, dt, content = existing_row
-        parsed_dt = datetime.datetime.fromisoformat(dt)
-        formatted_dt = parsed_dt.strftime('%d/%m/%Y %H:%M:%S | UTC')
+        parsed_dt = datetime.datetime.fromisoformat(dt).astimezone(CET_TZ)
+        formatted_dt = parsed_dt.strftime('%d/%m/%Y %H:%M:%S | CET')
         note_text = f"**Note #{note_id}**\nFrom: \"{creator}\"\nLast Update: {formatted_dt}\n{content}"
         c.execute(f"DELETE FROM {table_name} WHERE row = ?", (note_id,))
         database.commit()
@@ -473,8 +476,8 @@ async def clearnotes(context, user_id: str):
     note_texts = []
     for r in rows:
         note_id, creator, dt, content = r
-        parsed_dt = datetime.datetime.fromisoformat(dt)
-        formatted_dt = parsed_dt.strftime('%d/%m/%Y %H:%M:%S | UTC')
+        parsed_dt = datetime.datetime.fromisoformat(dt).astimezone(CET_TZ)
+        formatted_dt = parsed_dt.strftime('%d/%m/%Y %H:%M:%S | CET')
         note_texts.append(f"**Note #{note_id}**\nFrom: \"{creator}\"\nLast Update: {formatted_dt}\n{content}")
 
     full_text = "\n---\n".join(note_texts)
@@ -515,7 +518,7 @@ async def noteadd(context, user_id: str, *, note: str):
         return
 
     user_name = f"@{user.name}"
-    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    now = datetime.datetime.now(CET_TZ).isoformat()
     row = (user_id, user_name, note, creator_name, now, now)
     c.execute(f"INSERT INTO {table_name} (user_id, user_name, note, creator_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", row)
     database.commit()
@@ -570,13 +573,13 @@ async def set_reminder(context, time_str: str, content: str, is_dm: bool):
     if parsed_time is None:
         await reply_func("Invalid time format. Examples: 'in 2 hours', 'tomorrow at 8', 'next monday at 20:00'")
         return
-    if parsed_time < datetime.datetime.now(datetime.timezone.utc):
+    if parsed_time < datetime.datetime.now(CET_TZ):
         await reply_func("Cannot set a reminder in the past.")
         return
     database = sqlite3.connect('/data/user_notes.db')
     table_name = f"reminders_{guild_id}"
     create_reminders_table(database, table_name)
-    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    now = datetime.datetime.now(CET_TZ).isoformat()
     channel_id = context.channel.id if isinstance(context, commands.Context) else context.channel_id
     user_id = creator_id if is_dm else None
     channel_id = channel_id if not is_dm else None
@@ -587,17 +590,75 @@ async def set_reminder(context, time_str: str, content: str, is_dm: bool):
     rid = c.lastrowid
     formatted_date = parsed_time.strftime('%d/%m/%Y')
     formatted_time = parsed_time.strftime('%H:%M:%S')
-    await reply_func(f"Reminder set by {creator_name} for {formatted_date}, {formatted_time}, UTC. #Reminder ID:{rid}")
+    await reply_func(f"Reminder set by {creator_name} for {formatted_date}, {formatted_time}, CET. #Reminder ID:{rid}")
     database.close()
 
-@ntr.command(name='rm')
+async def extract_time_and_content(arg):
+    words = arg.split()
+    for i in range(1, len(words) + 1):
+        time_candidate = ' '.join(words[:i])
+        parsed = parse_time(time_candidate)
+        if parsed:
+            content = ' '.join(words[i:])
+            if content:  # Ensure there's content left
+                return parsed, content
+    return None, None
+
 @commands.has_permissions(administrator=True)
-async def prefix_rm(context, time_str: str, *, content: str):
-    await set_reminder(context, time_str, content, False)
-@ntr.command(name='rmdm')
+async def prefix_rm(context, *, arg: str):
+    guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
+    if guild_id is None:
+        await reply_func("This command can only be used in a server.", ephemeral=True if is_slash else False)
+        return
+    parsed_time, content = extract_time_and_content(arg)
+    if not parsed_time or not content:
+        await reply_func("Invalid format. Example: !rm in 2 hours reminder message")
+        return
+    if parsed_time < datetime.datetime.now(CET_TZ):
+        await reply_func("Cannot set a reminder in the past.")
+        return
+    database = sqlite3.connect('/data/user_notes.db')
+    table_name = f"reminders_{guild_id}"
+    create_reminders_table(database, table_name)
+    now = datetime.datetime.now(CET_TZ).isoformat()
+    channel_id = context.channel.id
+    row = (str(channel_id), None, str(creator_id), content, parsed_time.isoformat(), 0, now)
+    c = database.cursor()
+    c.execute(f"INSERT INTO {table_name} (channel_id, user_id, creator_id, content, target_time, sent, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", row)
+    database.commit()
+    rid = c.lastrowid
+    formatted_date = parsed_time.strftime('%d/%m/%Y')
+    formatted_time = parsed_time.strftime('%H:%M:%S')
+    await reply_func(f"Reminder set by {creator_name} for {formatted_date}, {formatted_time}, CET. #Reminder ID:{rid}")
+    database.close()
+
 @commands.has_permissions(administrator=True)
-async def prefix_rmdm(context, time_str: str, *, content: str):
-    await set_reminder(context, time_str, content, True)
+async def prefix_rmdm(context, *, arg: str):
+    guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
+    if guild_id is None:
+        await reply_func("This command can only be used in a server.", ephemeral=True if is_slash else False)
+        return
+    parsed_time, content = extract_time_and_content(arg)
+    if not parsed_time or not content:
+        await reply_func("Invalid format. Example: !rmdm tomorrow at 8 wake up")
+        return
+    if parsed_time < datetime.datetime.now(CET_TZ):
+        await reply_func("Cannot set a reminder in the past.")
+        return
+    database = sqlite3.connect('/data/user_notes.db')
+    table_name = f"reminders_{guild_id}"
+    create_reminders_table(database, table_name)
+    now = datetime.datetime.now(CET_TZ).isoformat()
+    user_id = creator_id
+    row = (None, str(user_id), str(creator_id), content, parsed_time.isoformat(), 0, now)
+    c = database.cursor()
+    c.execute(f"INSERT INTO {table_name} (channel_id, user_id, creator_id, content, target_time, sent, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", row)
+    database.commit()
+    rid = c.lastrowid
+    formatted_date = parsed_time.strftime('%d/%m/%Y')
+    formatted_time = parsed_time.strftime('%H:%M:%S')
+    await reply_func(f"DM Reminder set by {creator_name} for {formatted_date}, {formatted_time}, CET. #Reminder ID:{rid}")
+    database.close()
 
 # +++++++++++ Regular Commands +++++++++++ #
 
