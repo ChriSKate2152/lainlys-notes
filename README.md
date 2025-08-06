@@ -113,9 +113,9 @@ These are restricted to users with Administrator permissions on the server. They
 - `!readnotes {user_id}`: Displays all notes for the user in a formatted embed. 📖
 - `!delnote {note_id}`: Deletes a specific note and shows what was deleted. 🗑️
 - `!clearnotes {user_id}`: Deletes all notes for the user and lists them. 🗑️🗑️
-- `!note fetchall`: Downloads a zip archive of all server notes as CSV. 📦
 - `!rm {time} {reminder content}`: Sends a reminder to the channel at the specified time. ⏰
 - `!rmdm {time} {reminder content}`: Sends a personal DM reminder at the specified time. ⏰
+- `!note fetchall`: Downloads a zip archive of all server notes as CSV. 📦
 - `!notehelp`: Shows this help message for note commands. ❓
 
 
@@ -126,11 +126,10 @@ These are available to all users in the server, but access can be limited by ser
 - `/readnotes {user_id}`: Displays all notes for the user in a formatted embed. 📖
 - `/delnote {note_id}`: Deletes a specific note and shows what was deleted. 🗑️
 - `/clearnotes {user_id}`: Deletes all notes for the user and lists them. 🗑️🗑️
+- `/rm {time} {reminder content}`: Sends a reminder to the channel at the specified time. ⏰
+- `/rmdm {time} {reminder content}`: Sends a personal DM reminder at the specified time. ⏰
 - `/note fetchall`: Downloads a zip archive of all server notes as CSV. 📦
-- `!rm {time} {reminder content}`: Sends a reminder to the channel at the specified time. ⏰
-- `!rmdm {time} {reminder content}`: Sends a personal DM reminder at the specified time. ⏰
 - `/notehelp`: Shows this help message for note commands. ❓
-- `/help`: Shows this help message for note commands. ❓
 
 
 ### Attention:

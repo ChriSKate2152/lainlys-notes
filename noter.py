@@ -309,35 +309,57 @@ async def get_context_handlers(context):
     creator_id = context.author.id if isinstance(context, commands.Context) else context.user.id
     return guild_id, creator_name, reply_func, send_func, is_slash, creator_id
 
-@ntr.command(name='notehelp', description='Explains note commands.')
+@ntr.command(name='notehelp', description='Explains bot commands.')
 @commands.has_permissions(administrator=True)
 async def notehelp(context):
     guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
     rnd_hex = random_hex_color()
-    embed = discord.Embed(title='📝 Commands Help', colour=rnd_hex, timestamp=datetime.datetime.now(datetime.timezone.utc))
+    embed = discord.Embed(title='**🔑 Commands Index**', colour=rnd_hex, timestamp=datetime.datetime.now(datetime.timezone.utc))
     embed.set_thumbnail(url=bot_logo)
     if is_slash:
         prefix = '/'
-        embed.add_field(name=f'{prefix}noteadd <user_id> <note>', value="Adds a new note for the user. 🔖", inline=False)
-        embed.add_field(name=f'{prefix}readnotes <user_id>', value="Displays all notes for the user in a formatted embed. 📖", inline=False)
-        embed.add_field(name=f'{prefix}delnote <note_id>', value="Deletes a specific note and shows what was deleted. 🗑️", inline=False)
-        embed.add_field(name=f'{prefix}clearnotes <user_id>', value="Deletes all notes for the user and lists them. 🗑️🗑️", inline=False)
-        embed.add_field(name=f'{prefix}note fetchall', value="Downloads a zip archive of all server notes. 📦", inline=False)
-        embed.add_field(name=f'{prefix}notehelp', value="Shows this help message for note commands. ❓", inline=False)
-        embed.add_field(name=f'{prefix}help', value="Shows this help message for note commands. ❓", inline=False)
-        embed.add_field(name=f'{prefix}rm <time> <content>', value="Sets a reminder to send in the channel at the specified time. ⏰", inline=False)
-        embed.add_field(name=f'{prefix}rmdm <time> <content>', value="Sets a personal DM reminder at the specified time. 📩", inline=False)
     else:
         prefix = '!'
-        embed.add_field(name=f'{prefix}noteadd <user_id> <note>', value="Adds a new note for the user. 🔖", inline=False)
-        embed.add_field(name=f'{prefix}readnotes <user_id>', value="Displays all notes for the user in a formatted embed. 📖", inline=False)
-        embed.add_field(name=f'{prefix}delnote <note_id>', value="Deletes a specific note and shows what was deleted. 🗑️", inline=False)
-        embed.add_field(name=f'{prefix}clearnotes <user_id>', value="Deletes all notes for the user and lists them. 🗑️🗑️", inline=False)
-        embed.add_field(name=f'{prefix}note fetchall', value="Downloads a zip archive of all server notes. 📦", inline=False)
-        embed.add_field(name=f'{prefix}notehelp', value="Shows this help message for note commands. ❓", inline=False)
-        embed.add_field(name=f'{prefix}help', value="Shows this help message for note commands. ❓", inline=False)
-        embed.add_field(name=f'{prefix}rm <time> <content>', value="Sets a reminder to send in the channel at the specified time. ⏰", inline=False)
-        embed.add_field(name=f'{prefix}rmdm <time> <content>', value="Sets a personal DM reminder at the specified time. 📩", inline=False)
+    # Spacing after title
+    embed.add_field(name="\u200b", value="\n\n", inline=False)
+    # Notes title
+    embed.add_field(name="**📝 __Notes__ 📝**", value="\n", inline=False)
+    # Notes section
+    notes_section = f"""
+**🔖・{prefix}noteadd <user_id> <note>** 
+Adds a new note for the user.
+**📖・{prefix}readnotes <user_id>** 
+Displays all notes for the user in a formatted embed. 
+**🗑️・{prefix}delnote <note_id>**
+Deletes a specific note and shows what was deleted. 
+**🧨・{prefix}clearnotes <user_id>**
+Deletes all notes for the user and lists them.
+**📦・{prefix}note fetchall**
+Downloads a zip archive containing CSV files of all server notes.
+""".strip()
+    embed.add_field(name="\u200b", value=notes_section, inline=False)
+    # Spacing after notes
+    embed.add_field(name="\u200b", value="\n", inline=False)
+    # Reminders title
+    embed.add_field(name="**⏰ __Reminders__ ⏰**", value="\n", inline=False)
+    # Reminders section
+    reminders_section = f"""
+**📌・{prefix}rm <time> <content>**
+Sets a reminder to send in the channel at the specified time.
+**📩・{prefix}rmdm <time> <content>**
+Sets a personal DM reminder at the specified time.
+""".strip()
+    embed.add_field(name="\u200b", value=reminders_section, inline=False)
+    # Spacing after reminders
+    embed.add_field(name="\u200b", value="\n", inline=False)
+    # General title
+    embed.add_field(name="**🔧 __General__ 🔧**", value="\n", inline=False)
+    # General section
+    general_section = f"""
+**❓・{prefix}notehelp**
+Shows this help message for Bot commands.
+""".strip()
+    embed.add_field(name="\u200b", value=general_section, inline=False)
     embed.set_footer(text="Made with 🏹 by Lainly 2025 | BM Hunter forever")
     await send_func(embed=embed)
 
@@ -508,21 +530,17 @@ async def note_fetchall(context):
     if guild_id is None:
         await reply_func("This command can only be used in a server.", ephemeral=True if is_slash else False)
         return
-
     guild = ntr.get_guild(guild_id) or await ntr.fetch_guild(guild_id)
     server_name = guild.name.replace(' ', '_')
     date_str = datetime.datetime.now().strftime('%d-%m-%Y')
     filename = f"{server_name}-notes-archive-{date_str}.csv"
-
     database = sqlite3.connect('/data/user_notes.db')
     c = database.cursor()
     table_name = f"guild_{guild_id}"
-
     create_table(database, table_name)
     c.execute(f"SELECT * FROM {table_name}")
     rows = c.fetchall()
     database.close()
-
     if rows:
         with open(filename, 'w', newline='') as f:
             writer = csv.writer(f)
@@ -531,10 +549,8 @@ async def note_fetchall(context):
                 modified_row = list(row)
                 modified_row[1] = f'="{row[1]}"'  # Force user_id as text in Excel
                 writer.writerow(modified_row)
-
         with zipfile.ZipFile('user_db_notes.zip', 'w', zipfile.ZIP_DEFLATED) as zipf:
             zipf.write(filename)
-
         os.remove(filename)
         if is_slash:
             await send_func("DB logs here - Expires in 1min", view=dl_button())
@@ -603,9 +619,6 @@ async def prefix_rmdm(context, time_str: str, *, content: str):
 
 
 # Slash Command Equivalents (available to all users)
-@ntr.tree.command(name="help", description="Shows this help message for note commands. ❓")
-async def slash_help(interaction: discord.Interaction):
-    await notehelp(interaction)
 
 @ntr.tree.command(name="notehelp", description="Shows this help message for note commands. ❓")
 async def slash_notehelp(interaction: discord.Interaction):
