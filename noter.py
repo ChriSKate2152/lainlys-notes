@@ -109,12 +109,13 @@ def create_table(db_conn, table_name):
 def parse_time(time_str):
     import re
     now = datetime.datetime.now(CET_TZ)
-    if re.match(r'^\d{1,2}(:\d{2})?$', time_str):
+    is_time_only = re.match(r'^\d{1,2}(:\d{2})?$', time_str)
+    if is_time_only:
         time_str = f"at {time_str}"
     parsed = dateparser.parse(time_str, settings={'TIMEZONE': 'CET', 'RETURN_AS_TIMEZONE_AWARE': True, 'PREFER_DATES_FROM': 'future'})
     if parsed is None:
         return None
-    if parsed.date() == now.date() and parsed < now:
+    if is_time_only and parsed.date() == now.date() and parsed < now:
         parsed += datetime.timedelta(days=1)
     return parsed
 
@@ -127,12 +128,34 @@ def create_reminders_table(db_conn, table_name):
             user_id TEXT,
             creator_id TEXT,
             content TEXT,
-            target_time TEXT,
+            target_time REAL,
             sent INTEGER DEFAULT 0,
             created_at TEXT
         );
     """)
+    # Migration for existing data
+    try:
+        c.execute(f"ALTER TABLE {table_name} RENAME COLUMN target_time TO target_time_old")
+        c.execute(f"ALTER TABLE {table_name} ADD COLUMN target_time REAL")
+        c.execute(f"UPDATE {table_name} SET target_time = CAST(strftime('%s', target_time_old) AS REAL)")
+        c.execute(f"DROP COLUMN target_time_old")
+    except sqlite3.OperationalError:
+        pass  # If column doesn't exist or already migrated
     db_conn.commit()
+
+# Add helper functions
+def create_error_embed(message):
+    embed = discord.Embed(title="Error", description=message, color=hex_red, timestamp=datetime.datetime.now(CET_TZ))
+    embed.set_footer(text="Lainly's Notes")
+    return embed
+
+def create_success_embed(title, description, fields=None):
+    embed = discord.Embed(title=title, description=description, color=0xA020F0, timestamp=datetime.datetime.now(CET_TZ))
+    if fields:
+        for name, value, inline in fields:
+            embed.add_field(name=name, value=value, inline=inline)
+    embed.set_footer(text="Lainly's Notes")
+    return embed
 
 # +++++++++++ Normal Functions +++++++++++ #
 
@@ -155,7 +178,7 @@ def create_reminders_table(db_conn, table_name):
 ####################################################################################
 async def status():
     while True:
-        status_messages = ['Meta Huntering in BM', 'Getting HoF in Manaforge Omega', 'BM Hunter rotation class']
+        status_messages = ['Meta Huntering in BM', 'Getting HoF in Manaforge Omega', 'BM Hunter Masterclass']
         smsg = rnd.choice(status_messages)
         activity = discord.Streaming(type=1, url='https://www.youtube.com/watch?v=0TAfWiy2Sj0', name=smsg)
         await ntr.change_presence(status=discord.Status.online, activity=activity)
@@ -181,27 +204,46 @@ async def reminder_loop():
         c = database.cursor()
         c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'reminders_%'")
         tables = [row[0] for row in c.fetchall()]
-        now = datetime.datetime.now(CET_TZ).isoformat()
+        now_unix = time.time()
         for table in tables:
-            c.execute(f"SELECT id, channel_id, user_id, creator_id, content FROM {table} WHERE sent = 0 AND target_time <= ?", (now,))
-            for rid, channel_id, user_id, creator_id, content in c.fetchall():
+            c.execute(f"SELECT id, channel_id, user_id, creator_id, content, target_time FROM {table} WHERE sent = 0")
+            for rid, channel_id, user_id, creator_id, content, target_time in c.fetchall():
+                if target_time is None:
+                    continue
                 try:
-                    creator = await ntr.fetch_user(int(creator_id))
-                    creator_name = creator.name
-                except:
-                    creator_name = f"User {creator_id}"
-                try:
-                    if channel_id is not None:
-                        channel = ntr.get_channel(int(channel_id))
-                        if channel:
-                            await channel.send(f"🔔 Reminder: {content} #requested by <@{creator_id}>")
-                    elif user_id is not None:
-                        user = await ntr.fetch_user(int(user_id))
-                        if user:
-                            await user.send(f"🔔 Reminder: {content}")
+                    if isinstance(target_time, str):
+                        dt = datetime.datetime.fromisoformat(target_time)
+                        if dt.tzinfo is None:
+                            dt = CET_TZ.localize(dt)
+                        target_unix = dt.astimezone(pytz.utc).timestamp()
+                    else:
+                        target_unix = float(target_time)
                 except Exception as e:
-                    print(f"Error sending reminder {rid} from {table}: {e}")
-                c.execute(f"UPDATE {table} SET sent = 1 WHERE id = ?", (rid,))
+                    print(f"Error converting target_time {target_time} for rid {rid}: {e}")
+                    continue
+                if target_unix is not None and target_unix <= now_unix:
+                    try:
+                        creator = await ntr.fetch_user(int(creator_id))
+                        creator_name = creator.name
+                    except:
+                        creator_name = f"User {creator_id}"
+                    try:
+                        if channel_id is not None:
+                            channel = ntr.get_channel(int(channel_id))
+                            if channel:
+                                embed = discord.Embed(title="🔔🔔🔔 Reminder!", description=content, color=0xA020F0, timestamp=datetime.datetime.now(CET_TZ))
+                                embed.add_field(name="Requested by", value=f"{creator_name} (<@{creator_id}>)", inline=False)
+                                embed.set_footer(text="Lainly's Notes")
+                                await channel.send(embed=embed)
+                        elif user_id is not None:
+                            user = await ntr.fetch_user(int(user_id))
+                            if user:
+                                embed = discord.Embed(title="🔔🔔🔔 Reminder!", description=content, color=0xA020F0, timestamp=datetime.datetime.now(CET_TZ))
+                                embed.set_footer(text="Lainly's Notes")
+                                await user.send(embed=embed)
+                    except Exception as e:
+                        print(f"Error sending reminder {rid} from {table}: {e}")
+                    c.execute(f"UPDATE {table} SET sent = 1 WHERE id = ?", (rid,))
         database.commit()
         database.close()
         await asyncio.sleep(60)
@@ -251,15 +293,15 @@ async def on_ready():
 @ntr.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.MissingPermissions):
-        await ctx.reply("You must be an administrator to use this command.", delete_after=10)
+        await ctx.send(embed=create_error_embed("You must be an administrator to use this command. Use the / version instead."), delete_after=10)
     elif isinstance(error, commands.CommandNotFound):
         pass  # Ignore unknown commands
     else:
-        await ctx.reply(f"An error occurred: {str(error)}", delete_after=10)
+        await ctx.send(embed=create_error_embed(f"An error occurred: {str(error)}"), delete_after=10)
 
 @ntr.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error):
-    await interaction.response.send_message(f"An error occurred: {str(error)}", ephemeral=True, delete_after=10)
+    await interaction.response.send_message(embed=create_error_embed(f"An error occurred: {str(error)}"), ephemeral=True)
 
 # +++++++++++ Events +++++++++++ #
 
@@ -316,8 +358,7 @@ async def get_context_handlers(context):
 @commands.has_permissions(administrator=True)
 async def notehelp(context):
     guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
-    rnd_hex = random_hex_color()
-    embed = discord.Embed(title='**🔑 Commands Index**', colour=rnd_hex, timestamp=datetime.datetime.now(CET_TZ))
+    embed = discord.Embed(title='**🔑 Commands Index**', colour=0xA020F0, timestamp=datetime.datetime.now(CET_TZ))
     embed.set_thumbnail(url=bot_logo)
     if is_slash:
         prefix = '/'
@@ -371,7 +412,7 @@ Shows this help message for Bot commands.
 async def readnotes(context, user_id: str):
     guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
     if guild_id is None:
-        await reply_func("This command can only be used in a server.", ephemeral=True if is_slash else False)
+        await reply_func(embed=create_error_embed("This command can only be used in a server."), ephemeral=True if is_slash else False)
         return
 
     database = sqlite3.connect('/data/user_notes.db')
@@ -391,7 +432,7 @@ async def readnotes(context, user_id: str):
             username = user.name
         except:
             username = user_id
-        await reply_func(f"\"{username}\" has no notes.")
+        await reply_func(embed=create_error_embed(f"\"{username}\" has no notes."))
         database.close()
         return
 
@@ -412,10 +453,10 @@ async def readnotes(context, user_id: str):
 
     full_text = "\n---\n".join(note_texts)
 
-    rnd_hex = random_hex_color()
-    embed = discord.Embed(title=f"Notes for \"{username}\"", description=full_text, colour=rnd_hex, timestamp=datetime.datetime.now(CET_TZ))
+    embed = discord.Embed(title=f"Notes for \"{username}\"", description=full_text, colour=0xA020F0, timestamp=datetime.datetime.now(CET_TZ))
     if thumbnail:
         embed.set_thumbnail(url=thumbnail)
+    embed.set_footer(text="Lainly's Notes")
     await send_func(embed=embed)
     database.close()
 
@@ -424,7 +465,7 @@ async def readnotes(context, user_id: str):
 async def delnote(context, note_id: int):
     guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
     if guild_id is None:
-        await reply_func("This command can only be used in a server.", ephemeral=True if is_slash else False)
+        await reply_func(embed=create_error_embed("This command can only be used in a server."), ephemeral=True if is_slash else False)
         return
 
     database = sqlite3.connect('/data/user_notes.db')
@@ -437,7 +478,7 @@ async def delnote(context, note_id: int):
     existing_row = c.fetchone()
 
     if not existing_row:
-        await reply_func(f"No note found with ID {note_id}.")
+        await reply_func(embed=create_error_embed(f"No note found with ID {note_id}."))
     else:
         note_id, creator, dt, content = existing_row
         parsed_dt = datetime.datetime.fromisoformat(dt).astimezone(CET_TZ)
@@ -445,7 +486,7 @@ async def delnote(context, note_id: int):
         note_text = f"**Note #{note_id}**\nFrom: \"{creator}\"\nLast Update: {formatted_dt}\n{content}"
         c.execute(f"DELETE FROM {table_name} WHERE row = ?", (note_id,))
         database.commit()
-        await reply_func(f"Deleted the following note:\n{note_text}")
+        await reply_func(embed=create_success_embed("Note Deleted", note_text))
 
     database.close()
 
@@ -454,7 +495,7 @@ async def delnote(context, note_id: int):
 async def clearnotes(context, user_id: str):
     guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
     if guild_id is None:
-        await reply_func("This command can only be used in a server.", ephemeral=True if is_slash else False)
+        await reply_func(embed=create_error_embed("This command can only be used in a server."), ephemeral=True if is_slash else False)
         return
 
     database = sqlite3.connect('/data/user_notes.db')
@@ -469,7 +510,7 @@ async def clearnotes(context, user_id: str):
     rows = c.fetchall()
 
     if not rows:
-        await reply_func(f"No notes found for the user with ID {user_id}.")
+        await reply_func(embed=create_error_embed(f"No notes found for the user with ID {user_id}."))
         database.close()
         return
 
@@ -485,21 +526,21 @@ async def clearnotes(context, user_id: str):
     c.execute(f"DELETE FROM {table_name} WHERE user_id = ?", (user_id,))
     database.commit()
 
-    await reply_func(f"Deleted the following notes:\n{full_text}")
+    await reply_func(embed=create_success_embed("Notes Cleared", full_text))
     database.close()
 
 @ntr.group(name="note", invoke_without_command=True)
 @commands.has_permissions(administrator=True)
 async def note(context):
     guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
-    await reply_func("Available subcommands: fetchall")
+    await reply_func(embed=create_error_embed("Available subcommands: fetchall"))
 
 @ntr.command(name="noteadd", description="Adds a note about a user.")
 @commands.has_permissions(administrator=True)
 async def noteadd(context, user_id: str, *, note: str):
     guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
     if guild_id is None:
-        await reply_func("This command can only be used in a server.", ephemeral=True if is_slash else False)
+        await reply_func(embed=create_error_embed("This command can only be used in a server."), ephemeral=True if is_slash else False)
         return
 
     database = sqlite3.connect('/data/user_notes.db')
@@ -513,7 +554,7 @@ async def noteadd(context, user_id: str, *, note: str):
     try:
         user = await ntr.fetch_user(int(user_id))
     except:
-        await reply_func("Invalid user ID.")
+        await reply_func(embed=create_error_embed("Invalid user ID."))
         database.close()
         return
 
@@ -523,7 +564,16 @@ async def noteadd(context, user_id: str, *, note: str):
     c.execute(f"INSERT INTO {table_name} (user_id, user_name, note, creator_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)", row)
     database.commit()
     note_id = c.lastrowid
-    await reply_func(f"✅ Note Taken. Note: {note} (ID: {note_id})")
+    embed = discord.Embed(
+        title="Note Added",
+        description=f"Note added for <@{user_id}> by {creator_name}.\n\n**Note ID:** {note_id}\n**Content:** {note}",
+        colour=0xA020F0,
+        timestamp=datetime.datetime.now(CET_TZ)
+    )
+    if user.avatar:
+        embed.set_thumbnail(url=user.avatar.url)
+    embed.set_footer(text="Lainly's Notes")
+    await reply_func(embed=embed)
     database.close()
 
 @note.command(name="fetchall", description="Fetches all user notes.")
@@ -531,7 +581,7 @@ async def noteadd(context, user_id: str, *, note: str):
 async def note_fetchall(context):
     guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
     if guild_id is None:
-        await reply_func("This command can only be used in a server.", ephemeral=True if is_slash else False)
+        await reply_func(embed=create_error_embed("This command can only be used in a server."), ephemeral=True if is_slash else False)
         return
     guild = ntr.get_guild(guild_id) or await ntr.fetch_guild(guild_id)
     server_name = guild.name.replace(' ', '_')
@@ -556,108 +606,156 @@ async def note_fetchall(context):
             zipf.write(filename)
         os.remove(filename)
         if is_slash:
-            await send_func("DB logs here - Expires in 1min", view=dl_button())
+            await send_func(embed=create_success_embed("Notes Archive", "DB logs here - Expires in 1min"), view=dl_button(), delete_after=60 if not is_slash else None)
         else:
-            await send_func("DB logs here - Expires in 1min", view=dl_button(), delete_after=60)
+            await send_func(embed=create_success_embed("Notes Archive", "DB logs here - Expires in 1min"), view=dl_button(), delete_after=60)
     else:
-        await reply_func("Database is empty - No notes available to fetch.")
+        await reply_func(embed=create_error_embed("Database is empty - No notes available to fetch."))
 
 # +++++++++++ Regular Commands +++++++++++ #
 
 async def set_reminder(context, time_str: str, content: str, is_dm: bool):
     guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
-    if guild_id is None:
-        await reply_func("This command can only be used in a server.", ephemeral=True if is_slash else False)
-        return
     parsed_time = parse_time(time_str)
     if parsed_time is None:
-        await reply_func("Invalid time format. Examples: 'in 2 hours', 'tomorrow at 8', 'next monday at 20:00'")
+        await reply_func(embed=create_error_embed("Invalid time format. Examples: 'in 2 hours', 'tomorrow at 8', 'next monday at 20:00'"))
         return
     if parsed_time < datetime.datetime.now(CET_TZ):
-        await reply_func("Cannot set a reminder in the past.")
+        await reply_func(embed=create_error_embed("Cannot set a reminder in the past."))
         return
     database = sqlite3.connect('/data/user_notes.db')
-    table_name = f"reminders_{guild_id}"
+    table_name = f"reminders_{guild_id if guild_id else 'dm'}"
     create_reminders_table(database, table_name)
     now = datetime.datetime.now(CET_TZ).isoformat()
     channel_id = context.channel.id if isinstance(context, commands.Context) else context.channel_id
     user_id = creator_id if is_dm else None
     channel_id = channel_id if not is_dm else None
-    row = (str(channel_id) if channel_id else None, str(user_id) if user_id else None, str(creator_id), content, parsed_time.isoformat(), 0, now)
+    if guild_id is None and channel_id is not None:
+        channel_id = None
+        user_id = creator_id  # Treat rm as rmdm in DM
+    row = (str(channel_id) if channel_id else None, str(user_id) if user_id else None, str(creator_id), content, parsed_time.timestamp(), 0, now)
     c = database.cursor()
     c.execute(f"INSERT INTO {table_name} (channel_id, user_id, creator_id, content, target_time, sent, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", row)
     database.commit()
     rid = c.lastrowid
     formatted_date = parsed_time.strftime('%d/%m/%Y')
     formatted_time = parsed_time.strftime('%H:%M:%S')
-    await reply_func(f"Reminder set by {creator_name} for {formatted_date}, {formatted_time}, CET. #Reminder ID:{rid}")
+    formatted_created = datetime.datetime.fromisoformat(now).strftime('%d/%m/%Y %H:%M:%S')
+    fields = [
+        ("Set by", creator_name, True),
+        ("Reminder Time", f"{formatted_date} {formatted_time} CET", True),
+        ("Reminder ID", str(rid), True),
+        ("Content", content, False),
+        ("Created At", f"{formatted_created} CET", True)
+    ]
+    embed = create_success_embed(":bell: Reminder Set" if not is_dm else ":bell: Personal Reminder Set", "", fields)
+    if is_dm:
+        user = await ntr.fetch_user(creator_id)
+        await user.send(embed=embed)
+        if is_slash:
+            await context.response.send_message("Personal Reminder set. Details sent to your DM.", ephemeral=True)
+        # For prefix, no channel response
+    else:
+        await reply_func(embed=embed)
     database.close()
 
-async def extract_time_and_content(arg):
+def extract_time_and_content(arg):
+    import re
     words = arg.split()
-    for i in range(1, len(words) + 1):
+    duration_pattern = re.compile(r'^\d+ (second|minute|hour|day|week|month|year)s?( (and )?\d+ (second|minute|hour|day|week|month|year)s?)*$', re.I)
+    for i in range(len(words), 0, -1):
         time_candidate = ' '.join(words[:i])
         parsed = parse_time(time_candidate)
-        if parsed:
+        if not parsed and duration_pattern.match(time_candidate):
+            parsed = parse_time("in " + time_candidate)
+        if parsed and i < len(words):
             content = ' '.join(words[i:])
-            if content:  # Ensure there's content left
-                return parsed, content
+            return parsed, content
     return None, None
 
+@ntr.command(name='rm')
 @commands.has_permissions(administrator=True)
 async def prefix_rm(context, *, arg: str):
     guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
-    if guild_id is None:
-        await reply_func("This command can only be used in a server.", ephemeral=True if is_slash else False)
-        return
+    if guild_id is not None:
+        member = context.guild.get_member(context.author.id)
+        if not member.guild_permissions.administrator:
+            await reply_func(embed=create_error_embed("You must be an administrator to use this command. Use the / version instead."))
+            return
     parsed_time, content = extract_time_and_content(arg)
     if not parsed_time or not content:
-        await reply_func("Invalid format. Example: !rm in 2 hours reminder message")
+        await reply_func(embed=create_error_embed("Invalid format. Example: !rm in 2 hours reminder message"))
         return
     if parsed_time < datetime.datetime.now(CET_TZ):
-        await reply_func("Cannot set a reminder in the past.")
+        await reply_func(embed=create_error_embed("Cannot set a reminder in the past."))
         return
     database = sqlite3.connect('/data/user_notes.db')
-    table_name = f"reminders_{guild_id}"
+    table_name = f"reminders_{guild_id if guild_id else 'dm'}"
     create_reminders_table(database, table_name)
     now = datetime.datetime.now(CET_TZ).isoformat()
     channel_id = context.channel.id
-    row = (str(channel_id), None, str(creator_id), content, parsed_time.isoformat(), 0, now)
+    if guild_id is None:
+        channel_id = None
+    row = (str(channel_id) if channel_id else None, None if channel_id else str(creator_id), str(creator_id), content, parsed_time.timestamp(), 0, now)
     c = database.cursor()
     c.execute(f"INSERT INTO {table_name} (channel_id, user_id, creator_id, content, target_time, sent, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", row)
     database.commit()
     rid = c.lastrowid
-    formatted_date = parsed_time.strftime('%d/%m/%Y')
-    formatted_time = parsed_time.strftime('%H:%M:%S')
-    await reply_func(f"Reminder set by {creator_name} for {formatted_date}, {formatted_time}, CET. #Reminder ID:{rid}")
+    display_time = datetime.datetime.fromtimestamp(parsed_time.timestamp(), CET_TZ)
+    formatted_date = display_time.strftime('%d/%m/%Y')
+    formatted_time = display_time.strftime('%H:%M:%S')
+    formatted_created = datetime.datetime.fromisoformat(now).strftime('%d/%m/%Y %H:%M:%S')
+    fields = [
+        ("Set by", creator_name, True),
+        ("Reminder Time", f"{formatted_date} {formatted_time} CET", True),
+        ("Reminder ID", str(rid), True),
+        ("Content", content, False),
+        ("Created At", f"{formatted_created} CET", True)
+    ]
+    embed = create_success_embed(":bell: Reminder Set", "", fields)
+    await reply_func(embed=embed)
     database.close()
 
+@ntr.command(name='rmdm')
 @commands.has_permissions(administrator=True)
 async def prefix_rmdm(context, *, arg: str):
     guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
-    if guild_id is None:
-        await reply_func("This command can only be used in a server.", ephemeral=True if is_slash else False)
-        return
+    if guild_id is not None:
+        member = context.guild.get_member(context.author.id)
+        if not member.guild_permissions.administrator:
+            await reply_func(embed=create_error_embed("You must be an administrator to use this command. Use the / version instead."))
+            return
     parsed_time, content = extract_time_and_content(arg)
     if not parsed_time or not content:
-        await reply_func("Invalid format. Example: !rmdm tomorrow at 8 wake up")
+        await reply_func(embed=create_error_embed("Invalid format. Example: !rmdm tomorrow at 8 wake up"))
         return
     if parsed_time < datetime.datetime.now(CET_TZ):
-        await reply_func("Cannot set a reminder in the past.")
+        await reply_func(embed=create_error_embed("Cannot set a reminder in the past."))
         return
     database = sqlite3.connect('/data/user_notes.db')
-    table_name = f"reminders_{guild_id}"
+    table_name = f"reminders_{guild_id if guild_id else 'dm'}"
     create_reminders_table(database, table_name)
     now = datetime.datetime.now(CET_TZ).isoformat()
     user_id = creator_id
-    row = (None, str(user_id), str(creator_id), content, parsed_time.isoformat(), 0, now)
+    row = (None, str(user_id), str(creator_id), content, parsed_time.timestamp(), 0, now)
     c = database.cursor()
     c.execute(f"INSERT INTO {table_name} (channel_id, user_id, creator_id, content, target_time, sent, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", row)
     database.commit()
     rid = c.lastrowid
-    formatted_date = parsed_time.strftime('%d/%m/%Y')
-    formatted_time = parsed_time.strftime('%H:%M:%S')
-    await reply_func(f"DM Reminder set by {creator_name} for {formatted_date}, {formatted_time}, CET. #Reminder ID:{rid}")
+    display_time = datetime.datetime.fromtimestamp(parsed_time.timestamp(), CET_TZ)
+    formatted_date = display_time.strftime('%d/%m/%Y')
+    formatted_time = display_time.strftime('%H:%M:%S')
+    formatted_created = datetime.datetime.fromisoformat(now).strftime('%d/%m/%Y %H:%M:%S')
+    fields = [
+        ("Set by", creator_name, True),
+        ("Reminder Time", f"{formatted_date} {formatted_time} CET", True),
+        ("Reminder ID", str(rid), True),
+        ("Content", content, False),
+        ("Created At", f"{formatted_created} CET", True)
+    ]
+    embed = create_success_embed(":bell: Personal Reminder Set", "", fields)
+    user = await ntr.fetch_user(creator_id)
+    await user.send(embed=embed)  # Send to DM, no channel response
     database.close()
 
 # +++++++++++ Regular Commands +++++++++++ #
