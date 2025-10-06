@@ -22,5 +22,5 @@ VOLUME ["/data"]
 # Define environment variables if needed (e.g., for config)
 # ENV TOKEN=your-discord-token
 
-# Run the bot
-CMD ["python", "noter.py"] 
+# Run the bot with unbuffered output
+CMD ["python", "-u", "noter.py"] 

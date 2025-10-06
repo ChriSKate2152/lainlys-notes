@@ -32,6 +32,10 @@ CET_TZ = pytz.timezone('Europe/Berlin')
 # Load environment variables
 load_dotenv()
 
+# Configure logging to ensure messages appear in Docker logs
+logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s', force=True)
+logger = logging.getLogger(__name__)
+
 token = os.getenv('TOKEN')
 bot_logo = os.getenv('BOT_LOGO')
 
@@ -286,9 +290,15 @@ async def on_ready():
     ntr.loop.create_task(status())
     ntr.loop.create_task(reminder_loop())
 
-    print(f'Logged in as {ntr.user} (ID: {ntr.user.id})')
+    print(f'[READY] Logged in as {ntr.user} (ID: {ntr.user.id})')
+    print(f'[READY] Message Content Intent: {ntr.intents.message_content}')
+    print(f'[READY] Members Intent: {ntr.intents.members}')
     print('------')
+    logger.info(f"Logged in as {ntr.user} (ID: {ntr.user.id})")
+    logger.info(f"Message Content Intent: {ntr.intents.message_content}")
+    logger.info(f"Members Intent: {ntr.intents.members}")
     await ntr.tree.sync()  # Sync slash commands
+    print('[READY] Slash commands synced')
 
 @ntr.event
 async def on_command_error(ctx, error):
@@ -297,11 +307,34 @@ async def on_command_error(ctx, error):
     elif isinstance(error, commands.CommandNotFound):
         pass  # Ignore unknown commands
     else:
+        print(f"[ERROR] Command error in {ctx.command}: {error}")
+        import traceback
+        traceback.print_exc()
         await ctx.send(embed=create_error_embed(f"An error occurred: {str(error)}"), delete_after=10)
 
 @ntr.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error):
     await interaction.response.send_message(embed=create_error_embed(f"An error occurred: {str(error)}"), ephemeral=True)
+
+@ntr.event
+async def on_message(message):
+    if message.author == ntr.user:
+        return
+    if message.content.startswith('!'):
+        print(f"[DEBUG] Message received: {message.content}")
+        logger.info(f"Prefix message detected: {message.content}")
+    await ntr.process_commands(message)
+
+@ntr.event
+async def on_command_completion(ctx):
+    try:
+        cmd_name = ctx.command.qualified_name if ctx.command else 'unknown'
+        where = 'DM' if ctx.guild is None else f'Guild:{ctx.guild.id}'
+        print(f"[DEBUG] Prefix command completed: {cmd_name} | Location: {where}")
+        logger.info(f"Prefix command completed: {cmd_name} | Location: {where}")
+    except Exception as e:
+        print(f"[DEBUG] on_command_completion logging failed: {e}")
+        logger.info(f"on_command_completion logging failed: {e}")
 
 # +++++++++++ Events +++++++++++ #
 
@@ -651,10 +684,19 @@ async def set_reminder(context, time_str: str, content: str, is_dm: bool):
     embed = create_success_embed(":bell: Reminder Set" if not is_dm else ":bell: Personal Reminder Set", "", fields)
     if is_dm:
         user = await ntr.fetch_user(creator_id)
-        await user.send(embed=embed)
+        try:
+            await user.send(embed=embed)
+        except Exception as e:
+            print(f"Failed to send DM: {e}")
         if is_slash:
-            await context.response.send_message("Personal Reminder set. Details sent to your DM.", ephemeral=True)
-        # For prefix, no channel response
+            await context.response.send_message("✅ Personal Reminder set. Details sent to your DM.", ephemeral=True)
+        else:
+            # For prefix command, add reaction to original message
+            if isinstance(context, commands.Context):
+                try:
+                    await context.message.add_reaction("✅")
+                except Exception as e:
+                    print(f"Failed to add reaction: {e}")
     else:
         await reply_func(embed=embed)
     database.close()
@@ -719,7 +761,9 @@ async def prefix_rm(context, *, arg: str):
 @ntr.command(name='rmdm')
 @commands.has_permissions(administrator=True)
 async def prefix_rmdm(context, *, arg: str):
+    print(f"[DEBUG] prefix_rmdm called with arg: {arg}")
     guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
+    print(f"[DEBUG] guild_id: {guild_id}, creator_name: {creator_name}, is_slash: {is_slash}")
     if guild_id is not None:
         member = context.guild.get_member(context.author.id)
         if not member.guild_permissions.administrator:
@@ -755,7 +799,16 @@ async def prefix_rmdm(context, *, arg: str):
     ]
     embed = create_success_embed(":bell: Personal Reminder Set", "", fields)
     user = await ntr.fetch_user(creator_id)
-    await user.send(embed=embed)  # Send to DM, no channel response
+    try:
+        await user.send(embed=embed)  # Send to DM, no channel response
+    except Exception as e:
+        print(f"[DEBUG] Failed to send DM in prefix rmdm: {e}")
+    print("[DEBUG] Attempting to add reaction to prefix rmdm command message")
+    try:
+        await context.message.add_reaction("✅")
+        print("[DEBUG] Reaction added successfully")
+    except Exception as e:
+        print(f"[DEBUG] Failed to add reaction: {e}")
     database.close()
 
 # +++++++++++ Regular Commands +++++++++++ #
@@ -820,4 +873,7 @@ async def slash_rmdm(interaction: discord.Interaction, time_str: str, content: s
     await set_reminder(interaction, time_str, content, True)
 
 if __name__ == '__main__':
+    import sys
+    sys.stdout.reconfigure(line_buffering=True)  # Force unbuffered output for Docker logs
+    print("[STARTUP] Bot starting...")
     ntr.run(token, reconnect=True)
