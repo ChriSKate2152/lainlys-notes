@@ -170,7 +170,7 @@ def create_reminders_table(db_conn, table_name):
 
 # Add helper functions
 def create_error_embed(message):
-    embed = discord.Embed(title="Error", description=message, color=hex_red, timestamp=datetime.datetime.now(CET_TZ))
+    embed = discord.Embed(title="Error", description=message, color=0xA020F0, timestamp=datetime.datetime.now(CET_TZ))
     embed.set_footer(text="Lainly's Notes")
     return embed
 
@@ -446,8 +446,8 @@ Downloads a zip archive containing CSV files of all server notes.
 Sets a reminder to send in the channel at the specified time.
 **📩・{prefix}rmdm <time> <content>**
 Sets a personal DM reminder at the specified time.
-**📋・{prefix}rmlist** (DM-only)
-Lists your upcoming reminders across all servers and lets you delete one by replying with its number. Use in a DM with the bot.
+**📋・{prefix}rmlist**
+Lists your upcoming reminders across all servers and lets you delete one by replying with its number. If used in a server channel, the list is sent to you via DM and the original request is acknowledged with a ✅ reaction.
 """.strip()
     embed.add_field(name="\u200b", value=reminders_section, inline=False)
     # Spacing after reminders
@@ -848,8 +848,20 @@ async def prefix_rmdm(context, *, arg: str):
 
 # +++++++++++ Regular Commands +++++++++++ #
 
-async def list_and_handle_reminders(context):
+async def list_and_handle_reminders(context, force_dm: bool = False):
     guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
+    dm_channel = None
+    if force_dm:
+        # Override reply target to user's DM
+        try:
+            user_obj = context.author if isinstance(context, commands.Context) else context.user
+            dm_channel = await user_obj.create_dm()
+            async def dm_reply_func(content=None, **kwargs):
+                return await dm_channel.send(content, **kwargs)
+            reply_func = dm_reply_func
+        except Exception as e:
+            # Bubble up so caller can notify user appropriately
+            raise
     now_unix = time.time()
     database = sqlite3.connect('/data/user_notes.db')
     c = database.cursor()
@@ -881,12 +893,19 @@ async def list_and_handle_reminders(context):
     items.sort(key=lambda x: x[3])
     if not items:
         embed = discord.Embed(
-            title="Your Upcoming Reminders",
-            description="You have no upcoming reminders.",
+            title="⏰ Your Upcoming Reminders",
+            description="You have no upcoming reminders.\n\nTip: Create one with `/rm` or `!rm`.",
             colour=0xA020F0,
             timestamp=datetime.datetime.now(CET_TZ)
         )
-        embed.set_footer(text="Lainly's Notes")
+        try:
+            user_obj = context.author if isinstance(context, commands.Context) else context.user
+            if getattr(user_obj, "avatar", None):
+                thumb = user_obj.avatar.url if hasattr(user_obj.avatar, "url") else user_obj.avatar
+                embed.set_thumbnail(url=thumb)
+        except Exception:
+            pass
+        embed.set_footer(text="Lainly's Notes 🏹")
         await reply_func(embed=embed)
         database.close()
         return
@@ -895,25 +914,38 @@ async def list_and_handle_reminders(context):
     for idx, (_, _, content, target_unix) in enumerate(items, start=1):
         display_time = datetime.datetime.fromtimestamp(target_unix, CET_TZ)
         formatted_dt = display_time.strftime('%H:%M %d/%m/%Y')
-        lines.append(f"{idx}. Reminder: {content}\n   Scheduled for {formatted_dt} CET")
-    lines.append("\nReply with the number of a reminder here to delete it.")
-    desc = "\n".join(lines)
+        prefix = f"{idx}. "
+        indent = " " * len(prefix)
+        lines.append(f"{prefix}Reminder: {content}\n{indent}Scheduled for: {formatted_dt} CET")
+    desc = "\n\n".join(lines) + "\n\nReply with the number of a reminder here to delete it."
     list_embed = discord.Embed(
-        title="Your Upcoming Reminders",
+        title="⏰ Your Upcoming Reminders",
         description=desc,
         colour=0xA020F0,
         timestamp=datetime.datetime.now(CET_TZ)
     )
-    list_embed.set_footer(text="Lainly's Notes")
+    try:
+        user_obj = context.author if isinstance(context, commands.Context) else context.user
+        if getattr(user_obj, "avatar", None):
+            thumb = user_obj.avatar.url if hasattr(user_obj.avatar, "url") else user_obj.avatar
+            list_embed.set_thumbnail(url=thumb)
+    except Exception:
+        pass
+    list_embed.set_footer(text="Lainly's Notes 🏹")
     await reply_func(embed=list_embed)
     # Wait for a numeric reply from the same user in the same channel/DM
+    # Determine the channel to listen in
+    desired_channel_id = None
+    if force_dm and dm_channel is not None:
+        desired_channel_id = dm_channel.id
+    else:
+        desired_channel_id = context.channel.id if isinstance(context, commands.Context) else context.channel_id
     def check(msg: discord.Message):
         try:
             # Same author only
             if msg.author.id != creator_id:
                 return False
             # Same channel (works for DMs and guild channels)
-            desired_channel_id = context.channel.id if isinstance(context, commands.Context) else context.channel_id
             if msg.channel.id != desired_channel_id:
                 return False
             # Content is a valid number in range
@@ -934,20 +966,32 @@ async def list_and_handle_reminders(context):
     display_time = datetime.datetime.fromtimestamp(selected_unix, CET_TZ)
     formatted_dt = display_time.strftime('%H:%M %d/%m/%Y')
     confirm_embed = discord.Embed(
-        title=f"Reminder #{index}",
-        description=f"Reminder text: {selected_content}\nScheduled for: {formatted_dt} CET\nHas been deleted.",
+        title=f"🗑️ Reminder Deleted",
+        description=f"**Reminder:**\n> {selected_content}\n\n**Scheduled:** {formatted_dt} CET\n\n✅ This reminder has been deleted.",
         colour=0xA020F0,
         timestamp=datetime.datetime.now(CET_TZ)
     )
-    confirm_embed.set_footer(text="Lainly's Notes")
+    confirm_embed.set_footer(text="Lainly's Notes 🏹")
     await reply_func(embed=confirm_embed)
     database.close()
 
 @ntr.command(name='rmlist')
 async def prefix_rmlist(context):
-    # DM-only: if used in a guild/channel, inform the user
+    # If used in a guild/channel, react and DM the flow to the user
     if context.guild is not None:
-        await context.reply(embed=create_error_embed("This command can only be used in a direct message with the bot."))
+        # React to the invoking message
+        if isinstance(context, commands.Context):
+            try:
+                await context.message.add_reaction("✅")
+            except Exception as e:
+                print(f"[DEBUG] Failed to add reaction in prefix rmlist: {e}")
+        try:
+            await list_and_handle_reminders(context, force_dm=True)
+        except Exception as e:
+            try:
+                await context.reply(embed=create_error_embed("I couldn't DM you. Please enable DMs from server members and try again."))
+            except Exception as ie:
+                print(f"[DEBUG] Failed to notify in channel for rmlist DM failure: {ie}")
         return
     await list_and_handle_reminders(context)
 
@@ -1009,13 +1053,38 @@ async def slash_rm(interaction: discord.Interaction, time_str: str, content: str
 async def slash_rmdm(interaction: discord.Interaction, time_str: str, content: str):
     await set_reminder(interaction, time_str, content, True)
 
-@maybe_allowed_contexts(guilds=False, dms=True, private_channels=False)
+@maybe_allowed_contexts(guilds=True, dms=True, private_channels=False)
 @maybe_allowed_installs(guilds=True, users=True)
 @ntr.tree.command(name="rmlist", description="Lists your upcoming reminders and lets you delete one. 📋")
 async def slash_rmlist(interaction: discord.Interaction):
-    # DM-only: if invoked in a guild, inform the user (ephemeral)
+    # If invoked in a guild, DM the flow and show an ephemeral acknowledgment
     if interaction.guild_id is not None:
-        await interaction.response.send_message(embed=create_error_embed("This command can only be used in a direct message with the bot."), ephemeral=True)
+        # Respond immediately to avoid "application did not respond"
+        if not interaction.response.is_done():
+            try:
+                await interaction.response.send_message(content="✅ Check your DMs for your reminders list.", ephemeral=True)
+            except Exception as e:
+                print(f"[DEBUG] Failed to send initial ephemeral ack for /rmlist: {e}")
+        else:
+            try:
+                await interaction.followup.send(content="✅ Check your DMs for your reminders list.", ephemeral=True)
+            except Exception as e:
+                print(f"[DEBUG] Failed to send followup ephemeral ack for /rmlist: {e}")
+        # Now run the DM flow
+        try:
+            await list_and_handle_reminders(interaction, force_dm=True)
+        except Exception as e:
+            err_embed = create_error_embed("I couldn't DM you. Please enable DMs from server members and try again.")
+            if not interaction.response.is_done():
+                try:
+                    await interaction.response.send_message(embed=err_embed, ephemeral=True)
+                except Exception as ie:
+                    print(f"[DEBUG] Failed to send error response for /rmlist: {ie}")
+            else:
+                try:
+                    await interaction.followup.send(embed=err_embed, ephemeral=True)
+                except Exception as ie:
+                    print(f"[DEBUG] Failed to send error followup for /rmlist: {ie}")
         return
     await list_and_handle_reminders(interaction)
 
