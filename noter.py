@@ -45,6 +45,27 @@ hex_yellow=0xFFF000 # I also like -> 0xf4c50b
 
 # +++++++++++ Imports and definitions +++++++++++ #
 
+def maybe_allowed_contexts(**kwargs):
+    """
+    Returns a decorator that applies app_commands.allowed_contexts if available in this discord.py version,
+    otherwise returns a no-op decorator for compatibility.
+    """
+    if hasattr(app_commands, "allowed_contexts"):
+        return app_commands.allowed_contexts(**kwargs)
+    def _noop_decorator(func):
+        return func
+    return _noop_decorator
+
+def maybe_allowed_installs(**kwargs):
+    """
+    Returns a decorator that applies app_commands.allowed_installs if available in this discord.py version,
+    otherwise returns a no-op decorator for compatibility.
+    """
+    if hasattr(app_commands, "allowed_installs"):
+        return app_commands.allowed_installs(**kwargs)
+    def _noop_decorator(func):
+        return func
+    return _noop_decorator
 
 
 
@@ -425,8 +446,8 @@ Downloads a zip archive containing CSV files of all server notes.
 Sets a reminder to send in the channel at the specified time.
 **📩・{prefix}rmdm <time> <content>**
 Sets a personal DM reminder at the specified time.
-**📋・{prefix}rmlist**
-Lists your upcoming reminders and lets you delete one by replying with its number.
+**📋・{prefix}rmlist** (DM-only)
+Lists your upcoming reminders across all servers and lets you delete one by replying with its number. Use in a DM with the bot.
 """.strip()
     embed.add_field(name="\u200b", value=reminders_section, inline=False)
     # Spacing after reminders
@@ -817,6 +838,12 @@ async def prefix_rmdm(context, *, arg: str):
         await reply_func(content=confirm_text)
     except Exception as e:
         print(f"[DEBUG] Failed to send confirmation in prefix rmdm: {e}")
+    # Also react to the original command message (prefix only)
+    if isinstance(context, commands.Context):
+        try:
+            await context.message.add_reaction("✅")
+        except Exception as e:
+            print(f"[DEBUG] Failed to add reaction in prefix rmdm: {e}")
     database.close()
 
 # +++++++++++ Regular Commands +++++++++++ #
@@ -826,31 +853,32 @@ async def list_and_handle_reminders(context):
     now_unix = time.time()
     database = sqlite3.connect('/data/user_notes.db')
     c = database.cursor()
-    table_name = f"reminders_{guild_id if guild_id else 'dm'}"
-    create_reminders_table(database, table_name)
-    # Fetch pending reminders created by this user
-    c.execute(f"SELECT id, content, target_time FROM {table_name} WHERE sent = 0 AND creator_id = ?", (str(creator_id),))
-    rows = c.fetchall()
-    # Normalize and filter to future only
-    items = []
-    for rid, content, target_time in rows:
-        try:
-            if isinstance(target_time, str):
-                try:
+    # Discover all reminder tables to aggregate across all servers and DMs
+    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'reminders_%'")
+    reminder_tables = [row[0] for row in c.fetchall()]
+    items = []  # (table_name, rid, content, target_unix)
+    for table_name in reminder_tables:
+        create_reminders_table(database, table_name)
+        c.execute(f"SELECT id, content, target_time FROM {table_name} WHERE sent = 0 AND creator_id = ?", (str(creator_id),))
+        rows = c.fetchall()
+        for rid, content, target_time in rows:
+            try:
+                if isinstance(target_time, str):
+                    try:
+                        target_unix = float(target_time)
+                    except:
+                        dt = datetime.datetime.fromisoformat(target_time)
+                        if dt.tzinfo is None:
+                            dt = CET_TZ.localize(dt)
+                        target_unix = dt.astimezone(pytz.utc).timestamp()
+                else:
                     target_unix = float(target_time)
-                except:
-                    dt = datetime.datetime.fromisoformat(target_time)
-                    if dt.tzinfo is None:
-                        dt = CET_TZ.localize(dt)
-                    target_unix = dt.astimezone(pytz.utc).timestamp()
-            else:
-                target_unix = float(target_time)
-        except Exception:
-            continue
-        if target_unix > now_unix:
-            items.append((rid, content, target_unix))
+            except Exception:
+                continue
+            if target_unix > now_unix:
+                items.append((table_name, rid, content, target_unix))
     # Sort by time ascending
-    items.sort(key=lambda x: x[2])
+    items.sort(key=lambda x: x[3])
     if not items:
         embed = discord.Embed(
             title="Your Upcoming Reminders",
@@ -864,7 +892,7 @@ async def list_and_handle_reminders(context):
         return
     # Build numbered list
     lines = []
-    for idx, (_, content, target_unix) in enumerate(items, start=1):
+    for idx, (_, _, content, target_unix) in enumerate(items, start=1):
         display_time = datetime.datetime.fromtimestamp(target_unix, CET_TZ)
         formatted_dt = display_time.strftime('%H:%M %d/%m/%Y')
         lines.append(f"{idx}. Reminder: {content}\n   Scheduled for {formatted_dt} CET")
@@ -900,8 +928,8 @@ async def list_and_handle_reminders(context):
         database.close()
         return
     # Resolve and delete selected reminder
-    selected_rid, selected_content, selected_unix = items[index - 1]
-    c.execute(f"DELETE FROM {table_name} WHERE id = ?", (selected_rid,))
+    selected_table, selected_rid, selected_content, selected_unix = items[index - 1]
+    c.execute(f"DELETE FROM {selected_table} WHERE id = ?", (selected_rid,))
     database.commit()
     display_time = datetime.datetime.fromtimestamp(selected_unix, CET_TZ)
     formatted_dt = display_time.strftime('%H:%M %d/%m/%Y')
@@ -916,9 +944,12 @@ async def list_and_handle_reminders(context):
     database.close()
 
 @ntr.command(name='rmlist')
-@commands.has_permissions(administrator=True)
 async def prefix_rmlist(context):
-	await list_and_handle_reminders(context)
+    # DM-only: if used in a guild/channel, inform the user
+    if context.guild is not None:
+        await context.reply(embed=create_error_embed("This command can only be used in a direct message with the bot."))
+        return
+    await list_and_handle_reminders(context)
 
 
 
@@ -978,8 +1009,14 @@ async def slash_rm(interaction: discord.Interaction, time_str: str, content: str
 async def slash_rmdm(interaction: discord.Interaction, time_str: str, content: str):
     await set_reminder(interaction, time_str, content, True)
 
+@maybe_allowed_contexts(guilds=False, dms=True, private_channels=False)
+@maybe_allowed_installs(guilds=True, users=True)
 @ntr.tree.command(name="rmlist", description="Lists your upcoming reminders and lets you delete one. 📋")
 async def slash_rmlist(interaction: discord.Interaction):
+    # DM-only: if invoked in a guild, inform the user (ephemeral)
+    if interaction.guild_id is not None:
+        await interaction.response.send_message(embed=create_error_embed("This command can only be used in a direct message with the bot."), ephemeral=True)
+        return
     await list_and_handle_reminders(interaction)
 
 if __name__ == '__main__':

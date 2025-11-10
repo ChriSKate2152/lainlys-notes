@@ -115,7 +115,7 @@ These are restricted to users with Administrator permissions on the server. They
 - `!clearnotes {user_id}`: Deletes all notes for the user and lists them. 🗑️🗑️
 - `!rm {time} {reminder content}`: Sends a reminder to the channel at the specified time. ⏰
 - `!rmdm {time} {reminder content}`: Sends a personal DM reminder at the specified time. ⏰
-- `!rmlist`: Lists your upcoming reminders and lets you delete one by replying with its number. 📋
+- `!rmlist` (DM-only): Lists your upcoming reminders across all servers and lets you delete one by replying with its number. 📋
 - `!note fetchall`: Downloads a zip archive of all server notes as CSV. 📦
 - `!notehelp`: Shows this help message for note commands. ❓
 
@@ -129,7 +129,7 @@ These are available to all users in the server, but access can be limited by ser
 - `/clearnotes {user_id}`: Deletes all notes for the user and lists them. 🗑️🗑️
 - `/rm {time} {reminder content}`: Sends a reminder to the channel at the specified time. ⏰
 - `/rmdm {time} {reminder content}`: Sends a personal DM reminder at the specified time. ⏰
-- `/rmlist`: Lists your upcoming reminders and lets you delete one by replying with its number. 📋
+- `/rmlist` (DM-only): Lists your upcoming reminders across all servers and lets you delete one by replying with its number. 📋
 - `/note fetchall`: Downloads a zip archive of all server notes as CSV. 📦
 - `/notehelp`: Shows this help message for note commands. ❓
 
