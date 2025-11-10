@@ -425,6 +425,8 @@ Downloads a zip archive containing CSV files of all server notes.
 Sets a reminder to send in the channel at the specified time.
 **📩・{prefix}rmdm <time> <content>**
 Sets a personal DM reminder at the specified time.
+**📋・{prefix}rmlist**
+Lists your upcoming reminders and lets you delete one by replying with its number.
 """.strip()
     embed.add_field(name="\u200b", value=reminders_section, inline=False)
     # Spacing after reminders
@@ -481,7 +483,7 @@ async def readnotes(context, user_id: str):
     for r in rows:
         note_id, creator, dt, content = r
         parsed_dt = datetime.datetime.fromisoformat(dt).astimezone(CET_TZ)
-        formatted_dt = parsed_dt.strftime('%d/%m/%Y %H:%M:%S | CET')
+        formatted_dt = parsed_dt.strftime('%H:%M %d/%m/%Y CET')
         note_texts.append(f"**Note #{note_id}**\nFrom: \"{creator}\"\nLast Update: {formatted_dt}\n{content}")
 
     full_text = "\n---\n".join(note_texts)
@@ -515,7 +517,7 @@ async def delnote(context, note_id: int):
     else:
         note_id, creator, dt, content = existing_row
         parsed_dt = datetime.datetime.fromisoformat(dt).astimezone(CET_TZ)
-        formatted_dt = parsed_dt.strftime('%d/%m/%Y %H:%M:%S | CET')
+        formatted_dt = parsed_dt.strftime('%H:%M %d/%m/%Y CET')
         note_text = f"**Note #{note_id}**\nFrom: \"{creator}\"\nLast Update: {formatted_dt}\n{content}"
         c.execute(f"DELETE FROM {table_name} WHERE row = ?", (note_id,))
         database.commit()
@@ -551,7 +553,7 @@ async def clearnotes(context, user_id: str):
     for r in rows:
         note_id, creator, dt, content = r
         parsed_dt = datetime.datetime.fromisoformat(dt).astimezone(CET_TZ)
-        formatted_dt = parsed_dt.strftime('%d/%m/%Y %H:%M:%S | CET')
+        formatted_dt = parsed_dt.strftime('%H:%M %d/%m/%Y CET')
         note_texts.append(f"**Note #{note_id}**\nFrom: \"{creator}\"\nLast Update: {formatted_dt}\n{content}")
 
     full_text = "\n---\n".join(note_texts)
@@ -671,48 +673,70 @@ async def set_reminder(context, time_str: str, content: str, is_dm: bool):
     c.execute(f"INSERT INTO {table_name} (channel_id, user_id, creator_id, content, target_time, sent, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", row)
     database.commit()
     rid = c.lastrowid
-    formatted_date = parsed_time.strftime('%d/%m/%Y')
-    formatted_time = parsed_time.strftime('%H:%M:%S')
-    formatted_created = datetime.datetime.fromisoformat(now).strftime('%d/%m/%Y %H:%M:%S')
+    display_time = parsed_time.astimezone(CET_TZ)
+    formatted_dt = display_time.strftime('%H:%M %d/%m/%Y CET')
+    created_dt = datetime.datetime.fromisoformat(now).astimezone(CET_TZ)
+    formatted_created = created_dt.strftime('%H:%M %d/%m/%Y CET')
     fields = [
         ("Set by", creator_name, True),
-        ("Reminder Time", f"{formatted_date} {formatted_time} CET", True),
+        ("Reminder Time", f"{formatted_dt}", True),
         ("Reminder ID", str(rid), True),
         ("Content", content, False),
-        ("Created At", f"{formatted_created} CET", True)
+        ("Created At", f"{formatted_created}", True)
     ]
     embed = create_success_embed(":bell: Reminder Set" if not is_dm else ":bell: Personal Reminder Set", "", fields)
     if is_dm:
-        user = await ntr.fetch_user(creator_id)
-        try:
-            await user.send(embed=embed)
-        except Exception as e:
-            print(f"Failed to send DM: {e}")
-        if is_slash:
-            await context.response.send_message("✅ Personal Reminder set. Details sent to your DM.", ephemeral=True)
-        else:
-            # For prefix command, add reaction to original message
-            if isinstance(context, commands.Context):
-                try:
-                    await context.message.add_reaction("✅")
-                except Exception as e:
-                    print(f"Failed to add reaction: {e}")
+        # Unified confirmation reply for DM reminders (slash or prefix)
+        display_time = parsed_time.astimezone(CET_TZ)
+        formatted_dt = display_time.strftime('%H:%M %d/%m/%Y')
+        confirm_text = f"🔔 Reminder set for {formatted_dt} CET, I will DM you then!"
+        await reply_func(content=confirm_text)
     else:
         await reply_func(embed=embed)
     database.close()
 
 def extract_time_and_content(arg):
     import re
-    words = arg.split()
-    duration_pattern = re.compile(r'^\d+ (second|minute|hour|day|week|month|year)s?( (and )?\d+ (second|minute|hour|day|week|month|year)s?)*$', re.I)
-    for i in range(len(words), 0, -1):
+    text = arg.strip()
+    if not text:
+        return None, None
+    # Prefer quoted content first: "... 'your content'" or "... \"your content\""
+    quote_match = re.search(r'(["\'])(.+?)\1', text)
+    if quote_match:
+        content = quote_match.group(2).strip()
+        time_part = (text[:quote_match.start()] + text[quote_match.end():]).strip()
+        parsed = parse_time(time_part)
+        if parsed:
+            return parsed, content
+    # Tokenize and try to find a reasonable split between time and content
+    words = text.split()
+    if len(words) < 2:
+        return None, None
+    unit_re = r'(second|minute|hour|day|week|month|year)s?'
+    is_num = lambda w: re.fullmatch(r'\d+', w) is not None
+    is_unit = lambda w: re.fullmatch(unit_re, w, re.I) is not None
+    has_in_num_unit = lambda s: re.search(rf'\bin\s+\d+\s+{unit_re}\b', s, re.I) is not None
+    duration_line_re = re.compile(rf'^\d+\s+{unit_re}(?:\s+(?:and\s+)?\d+\s+{unit_re})*$', re.I)
+    # Scan from the beginning, taking the shortest valid time that still "looks right".
+    last_good_idx = None
+    last_good_dt = None
+    for i in range(1, len(words)):  # split before i (time), after i (content)
         time_candidate = ' '.join(words[:i])
         parsed = parse_time(time_candidate)
-        if not parsed and duration_pattern.match(time_candidate):
+        if not parsed and duration_line_re.match(time_candidate):
             parsed = parse_time("in " + time_candidate)
-        if parsed and i < len(words):
-            content = ' '.join(words[i:])
-            return parsed, content
+        if parsed:
+            last_good_idx = i
+            last_good_dt = parsed
+            # Heuristic: if we already have an "in N unit" and the next tokens begin with another "N unit",
+            # stop here to avoid eating content that repeats a duration (e.g., "in 4 days 4 days have passed").
+            if i + 1 < len(words) and has_in_num_unit(time_candidate):
+                if is_num(words[i]) and is_unit(words[i + 1]):
+                    break
+            # Otherwise, continue to see if adding more tokens still makes for a better time phrase (e.g., "tomorrow at 8").
+    if last_good_idx is not None and last_good_idx < len(words):
+        content = ' '.join(words[last_good_idx:]).strip().strip('\'"').strip()
+        return last_good_dt, content if content else None
     return None, None
 
 @ntr.command(name='rm')
@@ -744,15 +768,14 @@ async def prefix_rm(context, *, arg: str):
     database.commit()
     rid = c.lastrowid
     display_time = datetime.datetime.fromtimestamp(parsed_time.timestamp(), CET_TZ)
-    formatted_date = display_time.strftime('%d/%m/%Y')
-    formatted_time = display_time.strftime('%H:%M:%S')
-    formatted_created = datetime.datetime.fromisoformat(now).strftime('%d/%m/%Y %H:%M:%S')
+    formatted_dt = display_time.strftime('%H:%M %d/%m/%Y CET')
+    formatted_created = datetime.datetime.fromisoformat(now).astimezone(CET_TZ).strftime('%H:%M %d/%m/%Y CET')
     fields = [
         ("Set by", creator_name, True),
-        ("Reminder Time", f"{formatted_date} {formatted_time} CET", True),
+        ("Reminder Time", f"{formatted_dt}", True),
         ("Reminder ID", str(rid), True),
         ("Content", content, False),
-        ("Created At", f"{formatted_created} CET", True)
+        ("Created At", f"{formatted_created}", True)
     ]
     embed = create_success_embed(":bell: Reminder Set", "", fields)
     await reply_func(embed=embed)
@@ -786,33 +809,116 @@ async def prefix_rmdm(context, *, arg: str):
     c.execute(f"INSERT INTO {table_name} (channel_id, user_id, creator_id, content, target_time, sent, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)", row)
     database.commit()
     rid = c.lastrowid
-    display_time = datetime.datetime.fromtimestamp(parsed_time.timestamp(), CET_TZ)
-    formatted_date = display_time.strftime('%d/%m/%Y')
-    formatted_time = display_time.strftime('%H:%M:%S')
-    formatted_created = datetime.datetime.fromisoformat(now).strftime('%d/%m/%Y %H:%M:%S')
-    fields = [
-        ("Set by", creator_name, True),
-        ("Reminder Time", f"{formatted_date} {formatted_time} CET", True),
-        ("Reminder ID", str(rid), True),
-        ("Content", content, False),
-        ("Created At", f"{formatted_created} CET", True)
-    ]
-    embed = create_success_embed(":bell: Personal Reminder Set", "", fields)
-    user = await ntr.fetch_user(creator_id)
+    # Send creation-time confirmation as a simple reply where invoked
     try:
-        await user.send(embed=embed)  # Send to DM, no channel response
+        display_time = datetime.datetime.fromtimestamp(parsed_time.timestamp(), CET_TZ)
+        formatted_dt = display_time.strftime('%H:%M %d/%m/%Y')
+        confirm_text = f"🔔 Reminder set for {formatted_dt} CET, I will DM you then!"
+        await reply_func(content=confirm_text)
     except Exception as e:
-        print(f"[DEBUG] Failed to send DM in prefix rmdm: {e}")
-    print("[DEBUG] Attempting to add reaction to prefix rmdm command message")
-    try:
-        await context.message.add_reaction("✅")
-        print("[DEBUG] Reaction added successfully")
-    except Exception as e:
-        print(f"[DEBUG] Failed to add reaction: {e}")
+        print(f"[DEBUG] Failed to send confirmation in prefix rmdm: {e}")
     database.close()
 
 # +++++++++++ Regular Commands +++++++++++ #
 
+async def list_and_handle_reminders(context):
+    guild_id, creator_name, reply_func, send_func, is_slash, creator_id = await get_context_handlers(context)
+    now_unix = time.time()
+    database = sqlite3.connect('/data/user_notes.db')
+    c = database.cursor()
+    table_name = f"reminders_{guild_id if guild_id else 'dm'}"
+    create_reminders_table(database, table_name)
+    # Fetch pending reminders created by this user
+    c.execute(f"SELECT id, content, target_time FROM {table_name} WHERE sent = 0 AND creator_id = ?", (str(creator_id),))
+    rows = c.fetchall()
+    # Normalize and filter to future only
+    items = []
+    for rid, content, target_time in rows:
+        try:
+            if isinstance(target_time, str):
+                try:
+                    target_unix = float(target_time)
+                except:
+                    dt = datetime.datetime.fromisoformat(target_time)
+                    if dt.tzinfo is None:
+                        dt = CET_TZ.localize(dt)
+                    target_unix = dt.astimezone(pytz.utc).timestamp()
+            else:
+                target_unix = float(target_time)
+        except Exception:
+            continue
+        if target_unix > now_unix:
+            items.append((rid, content, target_unix))
+    # Sort by time ascending
+    items.sort(key=lambda x: x[2])
+    if not items:
+        embed = discord.Embed(
+            title="Your Upcoming Reminders",
+            description="You have no upcoming reminders.",
+            colour=0xA020F0,
+            timestamp=datetime.datetime.now(CET_TZ)
+        )
+        embed.set_footer(text="Lainly's Notes")
+        await reply_func(embed=embed)
+        database.close()
+        return
+    # Build numbered list
+    lines = []
+    for idx, (_, content, target_unix) in enumerate(items, start=1):
+        display_time = datetime.datetime.fromtimestamp(target_unix, CET_TZ)
+        formatted_dt = display_time.strftime('%H:%M %d/%m/%Y')
+        lines.append(f"{idx}. Reminder: {content}\n   Scheduled for {formatted_dt} CET")
+    lines.append("\nReply with the number of a reminder here to delete it.")
+    desc = "\n".join(lines)
+    list_embed = discord.Embed(
+        title="Your Upcoming Reminders",
+        description=desc,
+        colour=0xA020F0,
+        timestamp=datetime.datetime.now(CET_TZ)
+    )
+    list_embed.set_footer(text="Lainly's Notes")
+    await reply_func(embed=list_embed)
+    # Wait for a numeric reply from the same user in the same channel/DM
+    def check(msg: discord.Message):
+        try:
+            # Same author only
+            if msg.author.id != creator_id:
+                return False
+            # Same channel (works for DMs and guild channels)
+            desired_channel_id = context.channel.id if isinstance(context, commands.Context) else context.channel_id
+            if msg.channel.id != desired_channel_id:
+                return False
+            # Content is a valid number in range
+            num = int(msg.content.strip())
+            return 1 <= num <= len(items)
+        except Exception:
+            return False
+    try:
+        reply_msg: discord.Message = await ntr.wait_for('message', check=check, timeout=60)
+        index = int(reply_msg.content.strip())
+    except asyncio.TimeoutError:
+        database.close()
+        return
+    # Resolve and delete selected reminder
+    selected_rid, selected_content, selected_unix = items[index - 1]
+    c.execute(f"DELETE FROM {table_name} WHERE id = ?", (selected_rid,))
+    database.commit()
+    display_time = datetime.datetime.fromtimestamp(selected_unix, CET_TZ)
+    formatted_dt = display_time.strftime('%H:%M %d/%m/%Y')
+    confirm_embed = discord.Embed(
+        title=f"Reminder #{index}",
+        description=f"Reminder text: {selected_content}\nScheduled for: {formatted_dt} CET\nHas been deleted.",
+        colour=0xA020F0,
+        timestamp=datetime.datetime.now(CET_TZ)
+    )
+    confirm_embed.set_footer(text="Lainly's Notes")
+    await reply_func(embed=confirm_embed)
+    database.close()
+
+@ntr.command(name='rmlist')
+@commands.has_permissions(administrator=True)
+async def prefix_rmlist(context):
+	await list_and_handle_reminders(context)
 
 
 
@@ -871,6 +977,10 @@ async def slash_rm(interaction: discord.Interaction, time_str: str, content: str
 @app_commands.describe(time_str="The time for the reminder (e.g., 'in 2 hours', 'next monday at 8')", content="The reminder message")
 async def slash_rmdm(interaction: discord.Interaction, time_str: str, content: str):
     await set_reminder(interaction, time_str, content, True)
+
+@ntr.tree.command(name="rmlist", description="Lists your upcoming reminders and lets you delete one. 📋")
+async def slash_rmlist(interaction: discord.Interaction):
+    await list_and_handle_reminders(interaction)
 
 if __name__ == '__main__':
     import sys
