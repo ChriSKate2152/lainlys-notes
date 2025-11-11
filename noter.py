@@ -203,7 +203,7 @@ def create_success_embed(title, description, fields=None):
 ####################################################################################
 async def status():
     while True:
-        status_messages = ['Meta Huntering in BM', 'Getting HoF in Manaforge Omega', 'BM Hunter Masterclass']
+        status_messages = ['Meta Huntering in BM', 'Shooting blanks in Midnight', 'BM Hunter Masterclass']
         smsg = rnd.choice(status_messages)
         activity = discord.Streaming(type=1, url='https://www.youtube.com/watch?v=0TAfWiy2Sj0', name=smsg)
         await ntr.change_presence(status=discord.Status.online, activity=activity)
@@ -985,6 +985,11 @@ async def prefix_rmlist(context):
                 await context.message.add_reaction("✅")
             except Exception as e:
                 print(f"[DEBUG] Failed to add reaction in prefix rmlist: {e}")
+        # Also acknowledge in-channel so users know to check DMs
+        try:
+            await context.reply(content="A List of all your upcoming reminders was sent in DM")
+        except Exception as e:
+            print(f"[DEBUG] Failed to send in-channel ack for prefix rmlist: {e}")
         try:
             await list_and_handle_reminders(context, force_dm=True)
         except Exception as e:
